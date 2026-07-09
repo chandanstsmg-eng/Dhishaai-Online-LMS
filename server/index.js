@@ -23,6 +23,7 @@ const path    = require('path');
 const morgan  = require('morgan');
 const { v4: uuidv4 } = require('uuid');
 const store   = require('./db');   // SQLite persistence layer (with JSON fallback)
+const ai      = require('./ai');   // Claude-powered AI Tutor + Playground (key stays server-side)
 
 require('dotenv').config();
 
@@ -35,7 +36,9 @@ const CLIENT_DIST = path.join(__dirname, '../client/dist');
 app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ limit: '20mb', extended: true }));
-app.use(morgan('dev'));
+// Only log requests that error (4xx/5xx) — keeps the terminal quiet under heavy
+// traffic while still surfacing problems.
+app.use(morgan('dev', { skip: (req, res) => res.statusCode < 400 }));
 
 // ─── DATABASE ────────────────────────────────────────────────────────────────
 let DB = {
@@ -1057,6 +1060,25 @@ app.post('/api/quiz-violation', auth, (req, res) => {
 
   saveDB();
   res.json({ success: true, notified: targets.size });
+});
+
+// ── AI (Claude) — tutor chat + playground code runner ─────────────────────────
+// The API key stays server-side (in ai.js); the browser only talks to these.
+app.get('/api/ai/status', auth, (req, res) => res.json({ available: ai.aiAvailable() }));
+
+app.post('/api/ai/tutor', auth, async (req, res) => {
+  try { res.json(await ai.tutor(req.body || {})); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message || 'AI error' }); }
+});
+
+app.post('/api/ai/run', auth, async (req, res) => {
+  try { res.json(await ai.runCode(req.body || {})); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message || 'AI error' }); }
+});
+
+app.post('/api/ai/career', auth, async (req, res) => {
+  try { res.json(await ai.careerAdvice(req.body || {})); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message || 'AI error' }); }
 });
 
 // ── PROFILE ───────────────────────────────────────────────────────────────────

@@ -73,6 +73,11 @@ On first run the database is seeded with these accounts:
 | `PORT`       | Port the server listens on. `80` = `http://your-server`.       |
 | `JWT_SECRET` | Secret for signing login tokens — **set a long random value**. |
 | `NODE_ENV`   | `production` or `development`.                                  |
+| `AI_PROVIDER` | Which engine powers the **AI Tutor / Playground / Career advice**: `openai` (ChatGPT, default) or `anthropic` (Claude). Switching is just this one line — no code changes. |
+| `OPENAI_API_KEY` / `OPENAI_MODEL` | For `AI_PROVIDER=openai`. Key from https://platform.openai.com/api-keys. Default model `gpt-4o-mini` (cheap). |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | For `AI_PROVIDER=anthropic`. Key from https://console.anthropic.com. Default model `claude-opus-4-8`. |
+
+> The AI features are **optional** — if the chosen provider's key is blank, they show a "not configured" message and everything else works. **The key stays server-side; it is never sent to students' browsers.** Both OpenAI and Claude APIs are paid per use (there is no free API); `gpt-4o-mini` is the cheapest option.
 
 `.env` is **git-ignored** (it holds a secret). Always create it from `.env.example`.
 Without a `.env`, the server still runs with safe defaults (port 9000).

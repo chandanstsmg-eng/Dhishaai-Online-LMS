@@ -860,8 +860,7 @@ const LandingPage = ({ onGetStarted }) => {
                 <span style={{ position: "absolute", top: 10, right: 10, background: B.orange, color: "#fff", borderRadius: 6, padding: "3px 8px", fontSize: 10, fontWeight: 800, letterSpacing: .5 }}>{c.tag}</span>
               </div>
               <div style={{ padding: 18 }}>
-                <div style={{ fontWeight: 700, color: "#fff", marginBottom: 8 }}>{c.title}</div>
-                <div style={{ fontSize: 12, color: "rgba(255,255,255,.5)" }}>📚 {c.lessons} lessons · ⏱ {c.duration}</div>
+                <div style={{ fontWeight: 700, color: "#fff" }}>{c.title}</div>
               </div>
             </div>
           ))}
@@ -969,24 +968,6 @@ const AuthPage = ({ onLogin, onBack }) => {
     finally { setLoading(false); }
   };
 
-  const demoLogin = async (e, p) => {
-    setLoading(true); setErr("");
-    try {
-      const data = await POST("/auth/login", { email: e, password: p });
-      setToken(data.token);
-      onLogin(data.user, data.studentId, data.adminId, data.subject);
-    } catch (e) { setErr(e.message); }
-    finally { setLoading(false); }
-  };
-
-  const DEMOS = [
-    { label: "Rahul (Student)", email: "rahul@email.com", pw: "student123", color: "#4F46E5" },
-    { label: "Sneha (Student)", email: "sneha@email.com", pw: "student123", color: "#10B981" },
-    { label: "Priya (Python Admin)", email: "priya@dhishaai.com", pw: "python123", color: B.orange },
-    { label: "Authority (Batch)", email: "authority@dhishaai.com", pw: "authority123", color: "#A16207" },
-    { label: "Super Admin", email: "superadmin@dhishaai.com", pw: "superadmin123", color: B.purple },
-  ];
-
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(150deg,#0D2137,#17406E)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div className="auth-scope" style={{ background: "#fff", borderRadius: 24, padding: "clamp(28px,4vw,44px)", width: "100%", maxWidth: 460, boxShadow: "0 20px 60px rgba(0,0,0,.25)" }}>
@@ -1034,20 +1015,6 @@ const AuthPage = ({ onLogin, onBack }) => {
         <button className="btn btn-primary" style={{ width: "100%", justifyContent: "center", padding: "13px" }} onClick={submit} disabled={loading}>
           {loading ? <Spinner size={18} color="#fff" /> : (mode === "login" ? "Sign In →" : "Create Account →")}
         </button>
-
-        <div style={{ marginTop: 28, borderTop: `1px solid #f0f0f0`, paddingTop: 20 }}>
-          <div style={{ textAlign: "center", fontSize: 12, color: B.gray, marginBottom: 12, fontWeight: 600, letterSpacing: .5, textTransform: "uppercase" }}>Quick Demo Access</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {DEMOS.map(d => (
-              <button key={d.email} onClick={() => demoLogin(d.email, d.pw)} style={{ padding: "9px 14px", borderRadius: 9, border: `1.5px solid ${d.color}30`, background: `${d.color}08`, color: d.color, fontWeight: 600, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 8, transition: "all .15s" }}>
-                <div style={{ width: 24, height: 24, borderRadius: 6, background: d.color, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <Ico n="user" s={13} c="#fff" />
-                </div>
-                {d.label}
-              </button>
-            ))}
-          </div>
-        </div>
       </div>
     </div>
   );
@@ -2674,6 +2641,7 @@ df = pd.DataFrame(data)
 print(df)
 print(f"Average score: {df['Score'].mean()}")`);
   const [output, setOutput] = useState("");
+  const [explain, setExplain] = useState("");
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("editor");
 
@@ -2685,21 +2653,15 @@ print(f"Average score: {df['Score'].mean()}")`);
   ];
 
   const runCode = async () => {
-    setLoading(true); setOutput("⏳ Running your code...");
+    setLoading(true); setOutput("⏳ Running your code..."); setExplain("");
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1000,
-          messages: [{ role: "user", content: `Execute this Python code and show ONLY the stdout output with no explanation or markdown. If there's an error, show just the error:\n\n\`\`\`python\n${code}\n\`\`\`` }]
-        })
-      });
-      const data = await res.json();
-      setOutput(data.content?.[0]?.text || "No output");
-    } catch {
-      setOutput("⚠️ Connect to run live Python.\nAI execution powered by Claude API.\n\nTip: Add print() statements to see results.");
+      // Runs on our server (which calls Claude) — the API key stays server-side.
+      const data = await POST("/ai/run", { code });
+      setOutput((data.output ?? "").toString().trim() || "(no output)");
+      setExplain(data.explanation || "");
+    } catch (e) {
+      setOutput("⚠️ " + (e.message || "Couldn't run your code right now."));
+      setExplain("");
     }
     setLoading(false);
   };
@@ -2744,6 +2706,15 @@ print(f"Average score: {df['Score'].mean()}")`);
           </pre>
         </div>
       </div>
+      {explain && (
+        <div className="card-flat" style={{ padding: 16, marginTop: 12, borderLeft: `3px solid ${B.orange}` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <Ico n="ai" s={16} c={B.orange} />
+            <span style={{ fontWeight: 700, fontSize: 14, color: "var(--text)" }}>Explanation</span>
+          </div>
+          <div style={{ fontSize: 14, color: "var(--text2)", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{explain}</div>
+        </div>
+      )}
     </div>
   );
 };
@@ -2760,22 +2731,14 @@ const AITutorPage = () => {
   const send = async () => {
     if (!input.trim() || loading) return;
     const userMsg = { role: "user", content: input };
+    const history = msgs.slice(1); // drop the initial greeting; send the real conversation
     setMsgs(m => [...m, userMsg]); setInput(""); setLoading(true);
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6", max_tokens: 1000,
-          system: "You are a friendly and expert data analytics tutor for DhishaAI Complete Analytics in Bengaluru. Help students master Python, SQL, Power BI, Excel, and Machine Learning. Be encouraging, use simple language, give practical examples. Keep responses focused and useful. You can use simple markdown formatting like **bold** for emphasis.",
-          messages: [...msgs.filter((m, i) => i > 0 || m.role !== "assistant"), userMsg].map(m => ({ role: m.role, content: m.content }))
-        })
-      });
-      const data = await res.json();
-      const reply = data.content?.[0]?.text || "I'm here to help! Could you rephrase?";
-      setMsgs(m => [...m, { role: "assistant", content: reply }]);
-    } catch {
-      setMsgs(m => [...m, { role: "assistant", content: "I'm having trouble connecting right now. Please try again in a moment!" }]);
+      // Runs on our server (which calls Claude with a bounded system prompt).
+      const data = await POST("/ai/tutor", { question: userMsg.content, history });
+      setMsgs(m => [...m, { role: "assistant", content: data.answer || "I'm here to help — could you rephrase?" }]);
+    } catch (e) {
+      setMsgs(m => [...m, { role: "assistant", content: "⚠️ " + (e.message || "I'm having trouble connecting right now. Please try again in a moment.") }]);
     }
     setLoading(false);
   };
@@ -4237,23 +4200,13 @@ const CareerPage = () => {
 
   const getAiAdvice = async () => {
     setAiLoading(true); setAiAdvice("");
-    const completedCourses = (profile?.progress || []).filter(p => p.percent >= 80).length;
-    const enrolledCount = (profile?.enrolledCourses || []).length;
+    const completed = (profile?.progress || []).filter(p => p.percent >= 80).length;
+    const enrolled = (profile?.enrolledCourses || []).length;
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6", max_tokens: 1000,
-          messages: [{
-            role: "user",
-            content: `I'm a data analytics student at DhishaAI Complete Analytics, Bengaluru. My career goal is: "${career.targetRole || "Data Analyst"}". I have ${enrolledCount} courses enrolled, ${completedCourses} completed, XP: ${profile?.xp || 0}. My notes: "${career.notes || "none"}". Give me a specific, actionable 5-step career roadmap for becoming a ${career.targetRole || "Data Analyst"} in India. Be concise and practical. Format as numbered steps.`
-          }]
-        })
-      });
-      const data = await res.json();
-      setAiAdvice(data.content?.[0]?.text || "Unable to get advice.");
-    } catch { setAiAdvice("Connect to get AI-powered career advice."); }
+      // Runs on our server (which calls Claude) — the API key stays server-side.
+      const data = await POST("/ai/career", { targetRole: career.targetRole || "Data Analyst", notes: career.notes, enrolled, completed, xp: profile?.xp || 0 });
+      setAiAdvice(data.advice || "Unable to get advice.");
+    } catch (e) { setAiAdvice("⚠️ " + (e.message || "Couldn't get AI advice right now.")); }
     setAiLoading(false);
   };
 
