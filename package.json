@@ -1,0 +1,9 @@
+{
+  "name": "dhishaai-lms-enterprise",
+  "version": "5.0.0",
+  "description": "DhishaAI Enterprise LMS",
+  "scripts": {
+    "dev": "node server/index.js",
+    "start": "node server/index.js"
+  }
+}

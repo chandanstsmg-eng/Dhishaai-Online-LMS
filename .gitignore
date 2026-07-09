@@ -1,0 +1,26 @@
+# ─── Dependencies (installed with `npm install`) ───────────────────────────────
+# Never commit node_modules — it's large and the SQLite binary is OS-specific,
+# so committing it would break clones on a different operating system.
+node_modules/
+
+# ─── Runtime database (auto-created / seeded on first run) ──────────────────────
+server/dhishaai_lms.json
+*.db
+*.db-wal
+*.db-shm
+
+# ─── Secrets — copy server/.env.example to server/.env ─────────────────────────
+.env
+server/.env
+
+# ─── Logs & OS / editor cruft ──────────────────────────────────────────────────
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# NOTE: client/dist (the built frontend) IS committed on purpose so the app runs
+# with only `cd server && npm install && node index.js`. Rebuild it with
+# `cd client && npm install && npm run build` after changing the frontend.
