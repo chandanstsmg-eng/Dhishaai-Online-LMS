@@ -1110,9 +1110,27 @@ const AdminStudentsPage = ({ batches, courses }) => {
   const [creatingBatch, setCreatingBatch] = useState(false);
   const [newBatchName, setNewBatchName] = useState("");
 
+  // Pending enrollment requests from students, and the batch chosen per request.
+  const [requests, setRequests] = useState([]);
+  const [reqBatch, setReqBatch] = useState({});
+
   const load = () => GET("/students").then(setStudents).finally(() => setLoading(false));
   const reloadBatches = () => GET("/batches").then(setBatchList).catch(() => {});
-  useEffect(() => { load(); reloadBatches(); }, []);
+  const loadRequests = () => GET("/enroll-requests").then(setRequests).catch(() => {});
+  useEffect(() => { load(); reloadBatches(); loadRequests(); }, []);
+
+  const approveReq = async (r) => {
+    try {
+      await POST(`/enroll-requests/${r.id}/approve`, { batchId: reqBatch[r.id] || r.batchId || "" });
+      show(`Approved — ${r.studentName} enrolled in ${r.courseTitle}`);
+      loadRequests(); load();
+    } catch (e) { show(e.message, "error"); }
+  };
+  const rejectReq = async (r) => {
+    if (!confirm(`Reject ${r.studentName}'s request for "${r.courseTitle}"?`)) return;
+    try { await POST(`/enroll-requests/${r.id}/reject`, {}); show("Request rejected"); loadRequests(); }
+    catch (e) { show(e.message, "error"); }
+  };
 
   const batchName = id => batchList.find(b => b.id === id)?.name || id || "—";
   const createBatch = async () => {
@@ -1157,6 +1175,37 @@ const AdminStudentsPage = ({ batches, courses }) => {
         </div>
         <button className="btn btn-primary" onClick={openAdd}><Ico n="plus" s={15} />Add Student</button>
       </div>
+
+      {requests.length > 0 && (
+        <div className="card-flat" style={{ padding: 20, marginBottom: 16, borderLeft: `3px solid ${B.orange}` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <Ico n="bell" s={16} c={B.orange} />
+            <h3 style={{ fontWeight: 700, fontSize: 15, color: "var(--text)" }}>Enrollment Requests</h3>
+            <span className="badge" style={{ background: `${B.orange}20`, color: B.orange }}>{requests.length}</span>
+          </div>
+          <p style={{ color: "var(--text2)", fontSize: 12.5, marginBottom: 14 }}>Students asking to join a course. Approve (and pick their batch) or reject.</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {requests.map(r => (
+              <div key={r.id} style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 10, padding: "12px 14px", display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, justifyContent: "space-between" }}>
+                <div style={{ minWidth: 180 }}>
+                  <div style={{ fontWeight: 700, color: "var(--text)", fontSize: 14 }}>{r.studentName}</div>
+                  <div style={{ fontSize: 12, color: "var(--text2)" }}>wants to join <b style={{ color: "var(--text)" }}>{r.courseTitle}</b></div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <select className="input-field" style={{ padding: "7px 10px", fontSize: 13, minWidth: 150 }}
+                    value={reqBatch[r.id] ?? r.batchId ?? ""} onChange={e => setReqBatch(m => ({ ...m, [r.id]: e.target.value }))}>
+                    <option value="">No batch</option>
+                    {batchList.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                  <button className="btn btn-primary btn-sm" onClick={() => approveReq(r)}><Ico n="check" s={13} />Approve</button>
+                  <button className="btn btn-danger btn-sm" onClick={() => rejectReq(r)}><Ico n="x" s={13} />Reject</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="card-flat" style={{ padding: 14, marginBottom: 16, display: "flex", gap: 10 }}>
         <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, background: "var(--surface2)", borderRadius: 9, padding: "8px 12px", border: "1px solid var(--border)" }}>
           <Ico n="search" s={15} c="var(--text2)" />
@@ -1874,6 +1923,21 @@ const AdminSettingsPage = () => {
     } catch (e) { show(e.message, "error"); }
   };
 
+  // Download a CSV file from the server (with the auth token attached).
+  const downloadCsv = async (path, name) => {
+    try {
+      const res = await fetch(path, { headers: { Authorization: `Bearer ${getToken()}` } });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || "Export failed"); }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = name; a.click();
+      URL.revokeObjectURL(url);
+      show("CSV downloaded");
+    } catch (e) { show(e.message, "error"); }
+  };
+  // Read our own role from the login token to decide which exports to show.
+  const myRole = (() => { try { return JSON.parse(atob((getToken() || "").split(".")[1] || "")).role; } catch { return ""; } })();
+
   const sendNotif = async () => {
     if (!notifForm.title || !notifForm.body) { show("Fill title and message", "error"); return; }
     try { await POST("/notifications", notifForm); show("Notification sent!"); setNotifForm({ title: "", body: "" }); }
@@ -1940,8 +2004,12 @@ const AdminSettingsPage = () => {
         </div>
         <div className="card-flat" style={{ padding: 24 }}>
           <h3 style={{ fontWeight: 700, marginBottom: 6, color: "var(--text)" }}>Data Export</h3>
-          <p style={{ color: "var(--text2)", fontSize: 13, marginBottom: 16 }}>Download a full JSON backup of students, progress, and quiz results</p>
-          <button className="btn btn-secondary" onClick={exportDB}><Ico n="download" s={16} />Export Database (JSON)</button>
+          <p style={{ color: "var(--text2)", fontSize: 13, marginBottom: 16 }}>Download a students roster (open in Excel) to see who is using the platform, or a full JSON backup.</p>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button className="btn btn-primary" onClick={() => downloadCsv("/api/admin/export/students.csv", `dhishaai_students_${Date.now()}.csv`)}><Ico n="download" s={16} />Students (CSV)</button>
+            {myRole === "superadmin" && <button className="btn btn-secondary" onClick={() => downloadCsv("/api/admin/export/admins.csv", `dhishaai_admins_${Date.now()}.csv`)}><Ico n="download" s={16} />Admins (CSV)</button>}
+            <button className="btn btn-secondary" onClick={exportDB}><Ico n="download" s={16} />Full backup (JSON)</button>
+          </div>
         </div>
       </div>
     </div>
@@ -1954,17 +2022,30 @@ const StudentDashboard = ({ user, studentId, onOpenCourse }) => {
   const [profile, setProfile] = useState(null);
   const [courses, setCourses] = useState([]);
   const [leaderboard, setLB] = useState([]);
+  const [catalog, setCatalog] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [show, toastEl] = useToast();
 
+  const loadCatalog = () => GET("/courses/catalog").then(setCatalog).catch(() => {});
   useEffect(() => {
     Promise.all([
       GET("/profile").then(setProfile),
       GET("/courses").then(setCourses),
       GET("/leaderboard").then(setLB),
+      loadCatalog(),
     ]).finally(() => setLoading(false));
   }, []);
 
+  // Request enrollment — an admin then approves and assigns a batch.
+  const requestEnroll = async (c) => {
+    setCatalog(list => list.map(x => x.id === c.id ? { ...x, status: "pending" } : x)); // optimistic
+    try { await POST("/enroll-requests", { courseId: c.id }); show("Request sent — waiting for admin approval"); loadCatalog(); }
+    catch (e) { show(e.message, "error"); loadCatalog(); }
+  };
+
   if (loading) return <div style={{ display: "flex", justifyContent: "center", padding: 60 }}><Spinner size={36} /></div>;
+
+  const exploreCourses = catalog.filter(c => c.status !== "enrolled");
 
   const avgProgress = profile?.progress?.length > 0 ? Math.round(profile.progress.reduce((a, p) => a + p.percent, 0) / profile.progress.length) : 0;
   const rank = leaderboard.findIndex(s => s.id === profile?.id) + 1;
@@ -1972,6 +2053,7 @@ const StudentDashboard = ({ user, studentId, onOpenCourse }) => {
 
   return (
     <div className="fadeIn">
+      {toastEl}
       {/* Hero */}
       <div className="dash-hero" style={{ marginBottom: 16 }}>
         <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: .8, textTransform: "uppercase", color: "rgba(255,255,255,.4)", marginBottom: 3 }}>
@@ -2008,6 +2090,33 @@ const StudentDashboard = ({ user, studentId, onOpenCourse }) => {
         <StatCard label="Quizzes Completed" value={profile?.quizResults?.length || 0} icon="quiz" color="#10B981" />
         <StatCard label="Certificates" value={profile?.progress?.filter(p => p.percent >= 80).length || 0} icon="cert" color="#F59E0B" />
       </div>
+
+      {/* Explore / request enrollment */}
+      {exploreCourses.length > 0 && (
+        <div className="card-flat" style={{ padding: 20, marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <h3 style={{ fontWeight: 700, fontSize: 15, color: "var(--text)" }}>Explore Courses</h3>
+            <span className="badge badge-navy">{exploreCourses.length} available</span>
+          </div>
+          <p style={{ color: "var(--text2)", fontSize: 12.5, marginBottom: 14 }}>Tap Enroll to request a course — an admin will approve it and add you to a batch.</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 12 }}>
+            {exploreCourses.map(c => (
+              <div key={c.id} style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
+                <div style={{ height: 6, background: c.color || B.navy }} />
+                <div style={{ padding: 14 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)", marginBottom: 4 }}>{c.title}</div>
+                  <div style={{ fontSize: 11.5, color: "var(--text2)", marginBottom: 12 }}>{c.category}{c.instructorName ? ` · ${c.instructorName}` : ""}</div>
+                  {c.status === "pending" ? (
+                    <button className="btn btn-secondary btn-sm" disabled style={{ width: "100%", justifyContent: "center", opacity: .8 }}><Ico n="clock" s={13} />Requested</button>
+                  ) : (
+                    <button className="btn btn-primary btn-sm" style={{ width: "100%", justifyContent: "center" }} onClick={() => requestEnroll(c)}><Ico n="plus" s={13} />Enroll</button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Continue Learning */}
       {courses.length > 0 && (

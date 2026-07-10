@@ -57,6 +57,7 @@ let DB = {
   forum_posts: [],
   batches: [],
   authorities: [],  // { id, userId, name, email, batchIds[], phone, createdAt } — read-only batch monitors
+  enroll_requests: [], // { id, studentId, studentName, courseId, courseTitle, status:'pending'|'approved'|'rejected', batchId, requestedAt, decidedAt, decidedBy }
 };
 
 function loadDB() {
@@ -611,6 +612,110 @@ app.get('/api/courses', auth, (req, res) => {
     return { ...c, progress: livePercent(c, prog), instructorName: owner?.name || 'DhishaAI' };
   });
   res.json(courses);
+});
+
+// ── ENROLLMENT REQUESTS (student requests → admin approves) ───────────────────
+function notify(userId, title, body, type) {
+  if (!userId) return;
+  DB.notifications.push({ id: uuidv4(), userId, title, body, type: type || null, read: false, createdAt: new Date().toISOString() });
+}
+function notifyCourseAdmins(course, title, body, type) {
+  const targets = new Set();
+  if (course && course.ownerId) {
+    const owner = DB.admins.find(a => a.id === course.ownerId);
+    if (owner && owner.userId) targets.add(owner.userId);
+  }
+  DB.users.filter(u => u.role === 'superadmin').forEach(u => targets.add(u.id));
+  targets.forEach(uid => notify(uid, title, body, type));
+}
+
+// Catalog: every course + this student's status (enrolled / pending / available).
+app.get('/api/courses/catalog', auth, (req, res) => {
+  const student = DB.students.find(s => s.userId === req.user.id);
+  if (!student) return res.json([]);
+  const enrolled = new Set(DB.enrollments.filter(e => e.studentId === student.id).map(e => e.courseId));
+  const pending  = new Set((DB.enroll_requests || []).filter(r => r.studentId === student.id && r.status === 'pending').map(r => r.courseId));
+  res.json(DB.courses.map(c => {
+    const owner = DB.admins.find(a => a.id === c.ownerId);
+    const status = enrolled.has(c.id) ? 'enrolled' : pending.has(c.id) ? 'pending' : 'available';
+    return { id: c.id, title: c.title, category: c.category, color: c.color, duration: c.duration, description: c.description, instructorName: owner?.name || 'DhishaAI', status };
+  }));
+});
+
+// Student asks to enroll in a course.
+app.post('/api/enroll-requests', auth, (req, res) => {
+  const student = DB.students.find(s => s.userId === req.user.id);
+  if (!student) return res.status(403).json({ error: 'Students only' });
+  if (!Array.isArray(DB.enroll_requests)) DB.enroll_requests = [];
+  const courseId = Number(req.body.courseId);
+  const course = DB.courses.find(c => c.id === courseId);
+  if (!course) return res.status(404).json({ error: 'Course not found' });
+  if (DB.enrollments.find(e => e.studentId === student.id && e.courseId === courseId)) return res.status(400).json({ error: 'Already enrolled' });
+  if (DB.enroll_requests.find(r => r.studentId === student.id && r.courseId === courseId && r.status === 'pending')) return res.status(400).json({ error: 'Request already pending' });
+  const reqObj = { id: uuidv4(), studentId: student.id, studentName: student.name, studentEmail: student.email, courseId, courseTitle: course.title, status: 'pending', batchId: student.batchId || null, requestedAt: new Date().toISOString() };
+  DB.enroll_requests.push(reqObj);
+  notifyCourseAdmins(course, 'New enrollment request', `📩 ${student.name} requested to enroll in "${course.title}". Approve or reject in My Students → Enrollment Requests.`, 'enroll_request');
+  saveDB();
+  res.status(201).json(reqObj);
+});
+
+// Student cancels their own pending request.
+app.delete('/api/enroll-requests/:id', auth, (req, res) => {
+  const student = DB.students.find(s => s.userId === req.user.id);
+  const r = (DB.enroll_requests || []).find(x => x.id === req.params.id);
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  if (!student || r.studentId !== student.id) return res.status(403).json({ error: 'Not yours' });
+  DB.enroll_requests = DB.enroll_requests.filter(x => x.id !== req.params.id);
+  saveDB();
+  res.json({ success: true });
+});
+
+// Admin/super: list PENDING requests for their courses.
+app.get('/api/enroll-requests', auth, adminOrSuper, (req, res) => {
+  let reqs = (DB.enroll_requests || []).filter(r => r.status === 'pending');
+  if (req.user.role !== 'superadmin') {
+    const myCourseIds = adminCourseIds(getAdminRecord(req.user.id)?.id);
+    reqs = reqs.filter(r => myCourseIds.includes(r.courseId));
+  }
+  reqs.sort((a, b) => (a.requestedAt < b.requestedAt ? 1 : -1));
+  res.json(reqs);
+});
+
+function canDecide(req, r) {
+  if (req.user.role === 'superadmin') return true;
+  return adminCourseIds(getAdminRecord(req.user.id)?.id).includes(r.courseId);
+}
+
+// Admin/super approves a request (optionally assigning the student's batch).
+app.post('/api/enroll-requests/:id/approve', auth, adminOrSuper, (req, res) => {
+  const r = (DB.enroll_requests || []).find(x => x.id === req.params.id);
+  if (!r || r.status !== 'pending') return res.status(404).json({ error: 'Request not found' });
+  if (!canDecide(req, r)) return res.status(403).json({ error: 'Not your course' });
+  const course = DB.courses.find(c => c.id === r.courseId);
+  const student = DB.students.find(s => s.id === r.studentId);
+  if (!course || !student) return res.status(404).json({ error: 'Course or student missing' });
+  if (!DB.enrollments.find(e => e.studentId === student.id && e.courseId === r.courseId))
+    DB.enrollments.push({ id: uuidv4(), studentId: student.id, courseId: r.courseId, enrolledAt: new Date().toISOString() });
+  if (!DB.progress.find(p => p.studentId === student.id && p.courseId === r.courseId))
+    DB.progress.push({ id: uuidv4(), studentId: student.id, courseId: r.courseId, percent: 0, completedLessons: [], lastActivity: new Date().toISOString() });
+  const batchId = req.body.batchId;
+  if (batchId) { const sidx = DB.students.findIndex(s => s.id === student.id); if (sidx >= 0) DB.students[sidx].batchId = batchId; }
+  r.status = 'approved'; r.decidedAt = new Date().toISOString(); r.decidedBy = req.user.name; r.batchId = batchId || r.batchId || null;
+  notify(student.userId, 'Enrollment approved 🎉', `You've been enrolled in "${course.title}". Happy learning!`, 'enroll_approved');
+  saveDB();
+  res.json({ success: true });
+});
+
+// Admin/super rejects a request.
+app.post('/api/enroll-requests/:id/reject', auth, adminOrSuper, (req, res) => {
+  const r = (DB.enroll_requests || []).find(x => x.id === req.params.id);
+  if (!r || r.status !== 'pending') return res.status(404).json({ error: 'Request not found' });
+  if (!canDecide(req, r)) return res.status(403).json({ error: 'Not your course' });
+  r.status = 'rejected'; r.decidedAt = new Date().toISOString(); r.decidedBy = req.user.name;
+  const student = DB.students.find(s => s.id === r.studentId);
+  if (student) notify(student.userId, 'Enrollment request declined', `Your request to enroll in "${r.courseTitle}" was not approved. Please contact your admin.`, 'enroll_rejected');
+  saveDB();
+  res.json({ success: true });
 });
 
 app.post('/api/courses', auth, adminOrSuper, (req, res) => {
@@ -1406,6 +1511,52 @@ app.get('/api/admin/export', auth, adminOrSuper, (req, res) => {
   res.setHeader('Content-Disposition', `attachment; filename=dhishaai_export_${Date.now()}.json`);
   res.setHeader('Content-Type', 'application/json');
   res.json(exportData);
+});
+
+// ── CSV EXPORTS (open in Excel) ───────────────────────────────────────────────
+function csvCell(v) {
+  const s = (v === null || v === undefined) ? '' : String(v);
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function toCsv(headers, rows) {
+  // Leading BOM so Excel reads UTF-8 (names, ₹, etc.) correctly.
+  return '﻿' + [headers, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n');
+}
+function sendCsv(res, filename, csv) {
+  res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.send(csv);
+}
+const inDate = d => d ? new Date(d).toLocaleDateString('en-IN') : '';
+
+// Students roster CSV — superadmin: all students; admin: only their students.
+app.get('/api/admin/export/students.csv', auth, adminOrSuper, (req, res) => {
+  let students;
+  if (req.user.role === 'superadmin') {
+    students = DB.students;
+  } else {
+    const adminRec = getAdminRecord(req.user.id);
+    const ids = studentsInCourses(adminCourseIds(adminRec?.id));
+    students = DB.students.filter(s => ids.includes(s.id));
+  }
+  const headers = ['Name', 'Email', 'Phone', 'Batch', 'Courses Enrolled', 'Avg Progress %', 'Quiz Avg %', 'XP', 'Streak (days)', 'Status', 'Last Active', 'Joined'];
+  const rows = students.map(s => {
+    const r = studentReport(s);
+    return [r.name, r.email, r.phone, r.batchName, r.courses.length, r.avgProgress, r.quizAvg, r.xp, r.streak, r.active ? 'Active' : 'Inactive', inDate(r.lastActivity), inDate(s.joined)];
+  });
+  sendCsv(res, `dhishaai_students_${Date.now()}.csv`, toCsv(headers, rows));
+});
+
+// Admins roster CSV — super admin only.
+app.get('/api/admin/export/admins.csv', auth, adminOrSuper, (req, res) => {
+  if (req.user.role !== 'superadmin') return res.status(403).json({ error: 'Super admin only' });
+  const headers = ['Name', 'Email', 'Subject(s)', 'Courses Owned', 'Students', 'Phone', 'Created'];
+  const rows = DB.admins.map(a => {
+    const courseIds = adminCourseIds(a.id);
+    const subjects = (a.subjects && a.subjects.length) ? a.subjects.join('; ') : (a.subject || '');
+    return [a.name, a.email, subjects, courseIds.length, studentsInCourses(courseIds).length, a.phone || '', inDate(a.createdAt)];
+  });
+  sendCsv(res, `dhishaai_admins_${Date.now()}.csv`, toCsv(headers, rows));
 });
 
 // ── STUDY PLANNER ─────────────────────────────────────────────────────────────
