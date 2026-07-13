@@ -1129,7 +1129,8 @@ const AdminStudentsPage = ({ batches, courses }) => {
 
   // Pending enrollment requests from students, and the batch chosen per request.
   const [requests, setRequests] = useState([]);
-  const [reqBatch, setReqBatch] = useState({});
+  const [reqBatch, setReqBatch] = useState({});   // { [reqId]: batchId | "__new__" }
+  const [reqNewBatch, setReqNewBatch] = useState({}); // { [reqId]: typed name while creating }
 
   const load = () => GET("/students").then(setStudents).finally(() => setLoading(false));
   const reloadBatches = () => GET("/batches").then(setBatchList).catch(() => {});
@@ -1137,10 +1138,24 @@ const AdminStudentsPage = ({ batches, courses }) => {
   useEffect(() => { load(); reloadBatches(); loadRequests(); }, []);
 
   const approveReq = async (r) => {
+    const chosen = reqBatch[r.id] ?? r.batchId ?? "";
+    if (chosen === "__new__") { show("Create the batch (or pick one) before approving", "error"); return; }
     try {
-      await POST(`/enroll-requests/${r.id}/approve`, { batchId: reqBatch[r.id] || r.batchId || "" });
+      await POST(`/enroll-requests/${r.id}/approve`, { batchId: chosen || "" });
       show(`Approved — ${r.studentName} enrolled in ${r.courseTitle}`);
       loadRequests(); load();
+    } catch (e) { show(e.message, "error"); }
+  };
+  // Create a batch inline while approving a request, and select it for that request.
+  const createBatchForReq = async (r) => {
+    const name = (reqNewBatch[r.id] || "").trim();
+    if (!name) { show("Enter a batch name", "error"); return; }
+    try {
+      const b = await POST("/batches", { name });
+      await reloadBatches();
+      setReqBatch(m => ({ ...m, [r.id]: b.id }));
+      setReqNewBatch(m => ({ ...m, [r.id]: "" }));
+      show(`Batch "${b.name}" created — ${r.studentName} will be added to it`);
     } catch (e) { show(e.message, "error"); }
   };
   const rejectReq = async (r) => {
@@ -1209,13 +1224,27 @@ const AdminStudentsPage = ({ batches, courses }) => {
                   <div style={{ fontSize: 12, color: "var(--text2)" }}>wants to join <b style={{ color: "var(--text)" }}>{r.courseTitle}</b></div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <select className="input-field" style={{ padding: "7px 10px", fontSize: 13, minWidth: 150 }}
-                    value={reqBatch[r.id] ?? r.batchId ?? ""} onChange={e => setReqBatch(m => ({ ...m, [r.id]: e.target.value }))}>
-                    <option value="">No batch</option>
-                    {batchList.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-                  </select>
-                  <button className="btn btn-primary btn-sm" onClick={() => approveReq(r)}><Ico n="check" s={13} />Approve</button>
-                  <button className="btn btn-danger btn-sm" onClick={() => rejectReq(r)}><Ico n="x" s={13} />Reject</button>
+                  {reqBatch[r.id] === "__new__" ? (
+                    <>
+                      <input className="input-field" style={{ padding: "7px 10px", fontSize: 13, minWidth: 150 }}
+                        placeholder="New batch name" autoFocus value={reqNewBatch[r.id] || ""}
+                        onChange={e => setReqNewBatch(m => ({ ...m, [r.id]: e.target.value }))}
+                        onKeyDown={e => { if (e.key === "Enter") createBatchForReq(r); if (e.key === "Escape") setReqBatch(m => ({ ...m, [r.id]: "" })); }} />
+                      <button className="btn btn-primary btn-sm" onClick={() => createBatchForReq(r)}><Ico n="check" s={13} />Create batch</button>
+                      <button className="btn btn-secondary btn-sm" onClick={() => { setReqBatch(m => ({ ...m, [r.id]: "" })); setReqNewBatch(m => ({ ...m, [r.id]: "" })); }}>Cancel</button>
+                    </>
+                  ) : (
+                    <>
+                      <select className="input-field" style={{ padding: "7px 10px", fontSize: 13, minWidth: 150 }}
+                        value={reqBatch[r.id] ?? r.batchId ?? ""} onChange={e => setReqBatch(m => ({ ...m, [r.id]: e.target.value }))}>
+                        <option value="">No batch</option>
+                        {batchList.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                        <option value="__new__">+ Create new batch…</option>
+                      </select>
+                      <button className="btn btn-primary btn-sm" onClick={() => approveReq(r)}><Ico n="check" s={13} />Approve</button>
+                      <button className="btn btn-danger btn-sm" onClick={() => rejectReq(r)}><Ico n="x" s={13} />Reject</button>
+                    </>
+                  )}
                 </div>
               </div>
             ))}
