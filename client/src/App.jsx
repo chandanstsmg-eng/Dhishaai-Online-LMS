@@ -4930,6 +4930,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [dark, setDark] = useState(() => localStorage.getItem("lms_dark") === "1");
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const toggleDark = () => setDark(d => { const v = !d; localStorage.setItem("lms_dark", v ? "1" : "0"); return v; });
 
@@ -5018,6 +5019,22 @@ export default function App() {
     { id: "dashboard", label: "Batch Report", icon: "chart" },
   ];
   const nav = user?.role === "superadmin" ? NAV_SUPER : user?.role === "admin" ? NAV_ADMIN : user?.role === "authority" ? NAV_AUTHORITY : NAV_STUDENT;
+
+  // ── Global top-bar search: jump to any sidebar section or course ──
+  const isStudentRole = !["superadmin", "admin", "authority"].includes(user?.role);
+  const searchTerm = searchQuery.trim().toLowerCase();
+  const searchResults = searchTerm ? [
+    ...nav.filter(n => n.label.toLowerCase().includes(searchTerm))
+         .map(n => ({ key: "p-" + n.id, type: "page", id: n.id, label: n.label, icon: n.icon, sub: "Section" })),
+    ...courses.filter(c => (c.title || "").toLowerCase().includes(searchTerm) || (c.category || "").toLowerCase().includes(searchTerm))
+         .map(c => ({ key: "c-" + c.id, type: "course", id: c.id, label: c.title, icon: "book", sub: c.category || "Course" })),
+  ].slice(0, 8) : [];
+  const goSearchResult = res => {
+    if (!res) return;
+    if (res.type === "course") { if (isStudentRole) openCourse(res.id); else goPage("courses"); }
+    else goPage(res.id);
+    setSearchQuery(""); setSearchOpen(false);
+  };
 
   const BOTTOM_SUPER = [{ id: "dashboard", icon: "home", label: "Home" }, { id: "admins", icon: "users", label: "Admins" }, { id: "courses", icon: "book", label: "Courses" }, { id: "students", icon: "user", label: "Students" }, { id: "settings", icon: "settings", label: "Settings" }];
   const BOTTOM_ADMIN = [{ id: "dashboard", icon: "home", label: "Home" }, { id: "students", icon: "users", label: "Students" }, { id: "courses", icon: "book", label: "Courses" }, { id: "quiz", icon: "quiz", label: "Quizzes" }, { id: "settings", icon: "settings", label: "Settings" }];
@@ -5133,9 +5150,33 @@ export default function App() {
                 <button className="hamburger" onClick={() => setSidebarOpen(v => !v)}>
                   <Ico n="menu" s={22} c="var(--text)" />
                 </button>
-                <div className="top-bar-search">
-                  <Ico n="search" s={15} c="var(--text2)" />
-                  <input placeholder="Search..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+                <div style={{ position: "relative" }}>
+                  <div className="top-bar-search">
+                    <Ico n="search" s={15} c="var(--text2)" />
+                    <input placeholder="Search sections & courses..." value={searchQuery}
+                      onChange={e => { setSearchQuery(e.target.value); setSearchOpen(true); }}
+                      onFocus={() => setSearchOpen(true)}
+                      onBlur={() => setTimeout(() => setSearchOpen(false), 150)}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") goSearchResult(searchResults[0]);
+                        else if (e.key === "Escape") { setSearchQuery(""); setSearchOpen(false); e.currentTarget.blur(); }
+                      }} />
+                  </div>
+                  {searchOpen && searchTerm && (
+                    <div className="dropdown" style={{ top: "calc(100% + 6px)", left: 0, minWidth: 280, maxWidth: 340, maxHeight: 360, overflowY: "auto" }}>
+                      {searchResults.length === 0 ? (
+                        <div style={{ padding: "12px 16px", fontSize: 13, color: "var(--text2)" }}>No matches for “{searchQuery}”</div>
+                      ) : searchResults.map(res => (
+                        <div key={res.key} className="dropdown-item" onMouseDown={e => e.preventDefault()} onClick={() => goSearchResult(res)}>
+                          <Ico n={res.icon} s={16} c="var(--text2)" />
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: 13.5, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{res.label}</div>
+                            <div style={{ fontSize: 11, color: "var(--text2)" }}>{res.sub}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
