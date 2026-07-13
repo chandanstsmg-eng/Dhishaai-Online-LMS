@@ -1104,7 +1104,7 @@ const AdminStudentsPage = ({ batches, courses }) => {
   const [modal, setModal] = useState(null);
   const [search, setSearch] = useState("");
   const [show, toastEl] = useToast();
-  const [form, setForm] = useState({ name: "", email: "", phone: "", password: "student123", batchId: "", enrolledCourses: [] });
+  const [form, setForm] = useState({ name: "", email: "", phone: "", password: "student123", batchId: "", enrolledCourses: [], experience: "", company: "", qualification: "" });
   // Batches are managed locally so a batch created inline shows up immediately.
   const [batchList, setBatchList] = useState(batches || []);
   const [creatingBatch, setCreatingBatch] = useState(false);
@@ -1145,8 +1145,8 @@ const AdminStudentsPage = ({ batches, courses }) => {
     } catch (e) { show(e.message, "error"); }
   };
 
-  const openAdd = () => { setForm({ name: "", email: "", phone: "", password: "student123", batchId: "", enrolledCourses: [] }); setModal("add"); };
-  const openEdit = s => { setForm({ name: s.name, email: s.email, phone: s.phone || "", password: "", batchId: s.batchId, enrolledCourses: s.enrolledCourses || [] }); setModal(s); };
+  const openAdd = () => { setForm({ name: "", email: "", phone: "", password: "student123", batchId: "", enrolledCourses: [], experience: "", company: "", qualification: "" }); setModal("add"); };
+  const openEdit = s => { setForm({ name: s.name, email: s.email, phone: s.phone || "", password: "", batchId: s.batchId, enrolledCourses: s.enrolledCourses || [], experience: s.experience || "", company: s.company || "", qualification: s.qualification || "" }); setModal(s); };
 
   const save = async () => {
     try {
@@ -1254,6 +1254,11 @@ const AdminStudentsPage = ({ batches, courses }) => {
           <div className="form-group"><label className="form-label">Full Name</label><input className="input-field" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></div>
           <div className="form-group"><label className="form-label">Email</label><input className="input-field" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} disabled={modal !== "add"} /></div>
           <div className="form-group"><label className="form-label">Phone (optional)</label><input className="input-field" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div className="form-group"><label className="form-label">Qualification</label><input className="input-field" placeholder="e.g. B.Tech CSE" value={form.qualification} onChange={e => setForm({ ...form, qualification: e.target.value })} /></div>
+            <div className="form-group"><label className="form-label">Experience</label><input className="input-field" placeholder="e.g. 2 years / Fresher" value={form.experience} onChange={e => setForm({ ...form, experience: e.target.value })} /></div>
+          </div>
+          <div className="form-group"><label className="form-label">Company (optional)</label><input className="input-field" placeholder="Current / previous company" value={form.company} onChange={e => setForm({ ...form, company: e.target.value })} /></div>
           {modal === "add" && <div className="form-group"><label className="form-label">Password</label><input className="input-field" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} /></div>}
           <div className="form-group">
             <label className="form-label">Batch <span style={{ color: "var(--text2)", fontWeight: 500 }}>(the joining group this student belongs to)</span></label>
@@ -1557,6 +1562,17 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
     try { await DELETE(`/courses/${modCourse.id}/modules/${i}`); await reloadModCourse(); onCourseChange?.(); show("Module removed"); }
     catch (e) { show(e.message, "error"); }
   };
+  // Admin-controlled lesson release (which modules students can open).
+  const setManualRelease = async on => {
+    try { await PUT(`/courses/${modCourse.id}/lesson-release`, { manualRelease: on }); await reloadModCourse(); onCourseChange?.(); show(on ? "You now control which lessons students see" : "Auto-unlock restored"); }
+    catch (e) { show(e.message, "error"); }
+  };
+  const toggleReleased = async i => {
+    const cur = Array.isArray(modCourse.releasedModules) ? modCourse.releasedModules : [];
+    const next = cur.includes(i) ? cur.filter(x => x !== i) : [...cur, i];
+    try { await PUT(`/courses/${modCourse.id}/lesson-release`, { releasedModules: next }); await reloadModCourse(); onCourseChange?.(); }
+    catch (e) { show(e.message, "error"); }
+  };
 
   return (
     <div className="fadeIn">
@@ -1606,7 +1622,19 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
 
       {modCourse && (
         <Modal title={`Modules — ${modCourse.title}`} onClose={() => { setModCourse(null); setModForm({ index: null, title: "", topics: "" }); }} wide>
-          <p style={{ color: "var(--text2)", fontSize: 13, marginBottom: 16 }}>Add modules one by one. Students see them in order — each module unlocks the next only after its quiz is passed (70%+).</p>
+          <p style={{ color: "var(--text2)", fontSize: 13, marginBottom: 12 }}>Add modules one by one. By default each module unlocks the next after its quiz is passed (70%+).</p>
+
+          {/* Admin-controlled lesson release */}
+          <div style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 12, padding: 14, marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 13.5, color: "var(--text)" }}>I control which lessons students see</div>
+                <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 2 }}>Turn on to release lessons at your teaching pace — students only see the ones you release (you can skip around, e.g. release 1 and 4).</div>
+              </div>
+              <Toggle checked={!!modCourse.manualRelease} onChange={v => setManualRelease(v)} />
+            </div>
+          </div>
+
           {(modCourse.modules || []).length === 0 ? (
             <div style={{ fontSize: 13, color: "var(--text2)", marginBottom: 16 }}>No modules yet — add the first one below.</div>
           ) : (
@@ -1617,7 +1645,16 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
                     <div style={{ fontWeight: 700, color: "var(--text)", fontSize: 14 }}>Module {i + 1}: {m.title}</div>
                     <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 2 }}>{(m.topics || []).length} topics{(m.topics || []).length ? " — " + (m.topics || []).join(", ") : ""}</div>
                   </div>
-                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
+                    {modCourse.manualRelease && (
+                      <button type="button" onClick={() => toggleReleased(i)}
+                        style={{ padding: "5px 11px", borderRadius: 20, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                          border: `1.5px solid ${(modCourse.releasedModules || []).includes(i) ? B.success : "var(--border)"}`,
+                          background: (modCourse.releasedModules || []).includes(i) ? `${B.success}18` : "var(--surface)",
+                          color: (modCourse.releasedModules || []).includes(i) ? B.success : "var(--text2)" }}>
+                        {(modCourse.releasedModules || []).includes(i) ? "✓ Released" : "Locked"}
+                      </button>
+                    )}
                     <button className="btn btn-secondary btn-xs" onClick={() => editModule(m, i)}>Edit</button>
                     <button className="btn btn-danger btn-xs" onClick={() => deleteModule(i)}><Ico n="trash" s={12} /></button>
                   </div>
@@ -2256,7 +2293,10 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
     const quizPassed = quiz => !!quiz && results.some(r => r.quizId === quiz.id && r.total && r.score / r.total >= 0.7);
     const moduleTopicsDone = m => m.topics.every(t => topicDone(t.globalIndex));
     const moduleComplete = m => moduleTopicsDone(m) && (!m.quiz || quizPassed(m.quiz));
-    const moduleUnlocked = m => m.index === 0 || moduleComplete(modules[m.index - 1]);
+    // When the admin manually controls release, only the released modules are open;
+    // otherwise fall back to auto-unlock (finish the previous module to open the next).
+    const releasedSet = selected.manualRelease ? (Array.isArray(selected.releasedModules) ? selected.releasedModules : []) : null;
+    const moduleUnlocked = m => releasedSet ? releasedSet.includes(m.index) : (m.index === 0 || moduleComplete(modules[m.index - 1]));
     const overallPct = totalTopics ? Math.round((done.length / totalTopics) * 100) : 0;
     const allComplete = modules.length > 0 && modules.every(moduleComplete);
 
@@ -2469,7 +2509,7 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
                       <div style={{ fontSize: 12, color: "var(--text2)" }}>{m.topics.length} topics{m.quiz ? " · 1 quiz" : ""}</div>
                     </div>
                     {complete ? <span className="badge badge-green">Completed ✓</span>
-                      : !unlocked ? <span className="badge badge-navy">Locked</span>
+                      : !unlocked ? <span className="badge badge-navy">{selected.manualRelease ? "Not released yet" : "Locked"}</span>
                       : <span className="badge badge-orange">In progress</span>}
                   </div>
 
@@ -4080,6 +4120,9 @@ const AuthorityPage = () => {
             <span className="badge badge-purple">{detail.batchName}</span>
             <span className="badge badge-navy">{detail.email}</span>
             {detail.phone && <span className="badge badge-navy">📞 {detail.phone}</span>}
+            {detail.qualification && <span className="badge badge-navy">🎓 {detail.qualification}</span>}
+            {detail.experience && <span className="badge badge-navy">💼 {detail.experience}</span>}
+            {detail.company && <span className="badge badge-navy">🏢 {detail.company}</span>}
           </div>
           <div className="stat-grid" style={{ marginBottom: 20 }}>
             <StatCard label="XP" value={(detail.xp).toLocaleString()} icon="zap" color={B.orange} />
@@ -4592,6 +4635,208 @@ const ProfileDropdown = ({ user, onLogout, onClose }) => {
   );
 };
 
+// ─── ADMIN PROJECTS ────────────────────────────────────────────────────────────
+const AdminProjectsPage = ({ batches, courses }) => {
+  const [projects, setProjects] = useState([]);
+  const [students, setStudents] = useState([]);
+  const [modal, setModal] = useState(false);
+  const [form, setForm] = useState({ title: "", topic: "", description: "", assignType: "student", studentId: "", batchId: "", courseId: "", maxMarks: 100 });
+  const [grade, setGrade] = useState({}); // `${pid}_${sid}` -> { marks, feedback }
+  const [show, toastEl] = useToast();
+
+  const load = () => GET("/projects").then(setProjects).catch(() => {});
+  useEffect(() => { load(); GET("/students").then(setStudents).catch(() => {}); }, []);
+
+  const create = async () => {
+    if (!form.title.trim()) { show("Enter a project title", "error"); return; }
+    if (form.assignType === "student" && !form.studentId) { show("Pick a student", "error"); return; }
+    if (form.assignType === "batch" && !form.batchId) { show("Pick a batch", "error"); return; }
+    try {
+      await POST("/projects", { ...form, maxMarks: Number(form.maxMarks) || 100 });
+      show("Project assigned"); setModal(false);
+      setForm({ title: "", topic: "", description: "", assignType: "student", studentId: "", batchId: "", courseId: "", maxMarks: 100 });
+      load();
+    } catch (e) { show(e.message, "error"); }
+  };
+  const setG = (key, patch) => setGrade(m => ({ ...m, [key]: { ...m[key], ...patch } }));
+  const gradeRow = async (p, row) => {
+    const key = `${p.id}_${row.studentId}`; const g = grade[key] || {};
+    const marks = g.marks !== undefined ? g.marks : (row.marks ?? "");
+    if (marks === "" || isNaN(Number(marks))) { show("Enter marks", "error"); return; }
+    try {
+      await POST(`/projects/${p.id}/grade`, { studentId: row.studentId, marks: Number(marks), feedback: g.feedback !== undefined ? g.feedback : row.feedback });
+      show(`${row.studentName}: ${marks}/${p.maxMarks} — ${marks} XP set`); load();
+    } catch (e) { show(e.message, "error"); }
+  };
+  const del = async (p) => {
+    if (!confirm(`Delete project "${p.title}"? Any XP it awarded is removed.`)) return;
+    try { await DELETE(`/projects/${p.id}`); show("Project deleted"); load(); }
+    catch (e) { show(e.message, "error"); }
+  };
+
+  return (
+    <div className="fadeIn">
+      {toastEl}
+      <div className="section-header">
+        <div><h1 className="section-title">Projects</h1><p style={{ color: "var(--text2)", fontSize: 13 }}>{projects.length} projects assigned</p></div>
+        <button className="btn btn-primary" onClick={() => setModal(true)}><Ico n="plus" s={15} />Assign Project</button>
+      </div>
+      {projects.length === 0 ? <EmptyState icon="assign" title="No projects yet" desc="Assign a project to one student or a whole batch." action={<button className="btn btn-primary" onClick={() => setModal(true)}>Assign Project</button>} /> : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {projects.map(p => (
+            <div key={p.id} className="card" style={{ padding: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 10 }}>
+                <div>
+                  <div style={{ fontWeight: 700, color: "var(--text)", fontSize: 15 }}>{p.title}</div>
+                  <div style={{ fontSize: 12.5, color: "var(--text2)", marginTop: 3 }}>{p.topic ? `Topic: ${p.topic} · ` : ""}Max {p.maxMarks} · {p.assignType === "student" ? `Student: ${p.assigneeName}` : `Batch: ${p.assigneeName}`}</div>
+                </div>
+                <button className="btn btn-danger btn-xs" onClick={() => del(p)}><Ico n="trash" s={12} /></button>
+              </div>
+              {p.description && <div style={{ fontSize: 13, color: "var(--text2)", marginBottom: 12, whiteSpace: "pre-wrap" }}>{p.description}</div>}
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {p.rows.length === 0 ? <div style={{ fontSize: 12, color: "var(--text2)" }}>No students in this batch yet.</div> : p.rows.map(row => {
+                  const key = `${p.id}_${row.studentId}`; const g = grade[key] || {};
+                  const marksVal = g.marks !== undefined ? g.marks : (row.marks ?? "");
+                  const fbVal = g.feedback !== undefined ? g.feedback : row.feedback;
+                  return (
+                    <div key={row.studentId} style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px" }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                        <div style={{ minWidth: 150 }}>
+                          <div style={{ fontWeight: 600, color: "var(--text)", fontSize: 13.5 }}>{row.studentName}</div>
+                          <div style={{ fontSize: 11.5, color: row.gradedAt ? B.success : row.submittedAt ? B.navy : "var(--text2)" }}>{row.submittedAt ? (row.gradedAt ? `Graded: ${row.marks}/${p.maxMarks}` : "Submitted — awaiting grade") : "Not submitted yet"}</div>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <input className="input-field" type="number" min="0" max={p.maxMarks} placeholder="Marks" style={{ width: 78, padding: "6px 8px", fontSize: 13 }} value={marksVal} onChange={e => setG(key, { marks: e.target.value })} />
+                          <span style={{ fontSize: 12, color: "var(--text2)" }}>/ {p.maxMarks}</span>
+                          <button className="btn btn-primary btn-sm" onClick={() => gradeRow(p, row)}>{row.gradedAt ? "Update" : "Grade"}</button>
+                        </div>
+                      </div>
+                      {row.link && <div style={{ fontSize: 12, marginTop: 6 }}><a href={row.link} target="_blank" rel="noreferrer" style={{ color: B.orange }}>🔗 {row.link}</a></div>}
+                      {row.note && <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 4, whiteSpace: "pre-wrap" }}>📝 {row.note}</div>}
+                      <input className="input-field" placeholder="Feedback (optional)" style={{ marginTop: 6, fontSize: 12.5, padding: "6px 10px" }} value={fbVal} onChange={e => setG(key, { feedback: e.target.value })} />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {modal && (
+        <Modal title="Assign Project" onClose={() => setModal(false)}>
+          <div className="form-group"><label className="form-label">Project Title</label><input className="input-field" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="e.g. Sales Dashboard in Power BI" /></div>
+          <div className="form-group"><label className="form-label">Topic <span style={{ color: "var(--text2)", fontWeight: 500 }}>(each student can get a different one)</span></label><input className="input-field" value={form.topic} onChange={e => setForm({ ...form, topic: e.target.value })} placeholder="e.g. Superstore sales analysis" /></div>
+          <div className="form-group"><label className="form-label">Description / instructions</label><textarea className="input-field" rows={3} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} style={{ resize: "vertical" }} /></div>
+          <div className="form-group">
+            <label className="form-label">Assign to</label>
+            <div className="tab-bar">
+              <button className={`tab ${form.assignType === "student" ? "active" : ""}`} style={{ flex: 1, justifyContent: "center" }} onClick={() => setForm({ ...form, assignType: "student" })}>One student</button>
+              <button className={`tab ${form.assignType === "batch" ? "active" : ""}`} style={{ flex: 1, justifyContent: "center" }} onClick={() => setForm({ ...form, assignType: "batch" })}>Whole batch</button>
+            </div>
+          </div>
+          {form.assignType === "student" ? (
+            <div className="form-group"><label className="form-label">Student</label>
+              <select className="input-field" value={form.studentId} onChange={e => setForm({ ...form, studentId: e.target.value })}>
+                <option value="">— Select student —</option>
+                {students.map(s => <option key={s.id} value={s.id}>{s.name} ({s.email})</option>)}
+              </select>
+            </div>
+          ) : (
+            <div className="form-group"><label className="form-label">Batch <span style={{ color: "var(--text2)", fontWeight: 500 }}>(all students in it get this project)</span></label>
+              <select className="input-field" value={form.batchId} onChange={e => setForm({ ...form, batchId: e.target.value })}>
+                <option value="">— Select batch —</option>
+                {(batches || []).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            </div>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div className="form-group"><label className="form-label">Course (optional)</label>
+              <select className="input-field" value={form.courseId} onChange={e => setForm({ ...form, courseId: e.target.value })}>
+                <option value="">— None —</option>
+                {(courses || []).map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+              </select>
+            </div>
+            <div className="form-group"><label className="form-label">Max Marks</label><input className="input-field" type="number" min="1" value={form.maxMarks} onChange={e => setForm({ ...form, maxMarks: e.target.value })} /></div>
+          </div>
+          <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+            <button className="btn btn-primary" style={{ flex: 1, justifyContent: "center" }} onClick={create}>Assign Project</button>
+            <button className="btn btn-secondary" onClick={() => setModal(false)}>Cancel</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+};
+
+// ─── STUDENT PROJECTS ──────────────────────────────────────────────────────────
+const StudentProjectsPage = () => {
+  const [projects, setProjects] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [inputs, setInputs] = useState({}); // pid -> { link, note }
+  const [show, toastEl] = useToast();
+
+  const load = () => GET("/my-projects").then(setProjects).finally(() => setLoading(false));
+  useEffect(() => { load(); }, []);
+
+  const setI = (id, patch) => setInputs(m => ({ ...m, [id]: { ...m[id], ...patch } }));
+  const submit = async (p) => {
+    const v = inputs[p.id] || {};
+    const link = v.link !== undefined ? v.link : p.link;
+    const note = v.note !== undefined ? v.note : p.note;
+    if (!link && !note) { show("Add a submission link or a note", "error"); return; }
+    try { await POST(`/projects/${p.id}/submit`, { link, note }); show("Submitted ✓"); load(); }
+    catch (e) { show(e.message, "error"); }
+  };
+
+  if (loading) return <div style={{ display: "flex", justifyContent: "center", padding: 60 }}><Spinner size={32} /></div>;
+
+  return (
+    <div className="fadeIn">
+      {toastEl}
+      <h1 style={{ fontSize: 24, fontWeight: 800, marginBottom: 6, color: "var(--text)" }}>My Projects</h1>
+      <p style={{ color: "var(--text2)", fontSize: 13, marginBottom: 20 }}>Projects your admin assigned to you. Submit your work link to get graded and earn XP.</p>
+      {projects.length === 0 ? <EmptyState icon="assign" title="No projects yet" desc="Your admin will assign projects here." /> : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {projects.map(p => {
+            const v = inputs[p.id] || {};
+            const linkVal = v.link !== undefined ? v.link : p.link;
+            const noteVal = v.note !== undefined ? v.note : p.note;
+            const sc = p.status === "graded" ? B.success : p.status === "submitted" ? B.navy : B.orange;
+            const sl = p.status === "graded" ? "Graded" : p.status === "submitted" ? "Submitted" : "To do";
+            return (
+              <div key={p.id} className="card-flat" style={{ padding: 20 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                  <div>
+                    <div style={{ fontWeight: 700, color: "var(--text)", fontSize: 16 }}>{p.title}</div>
+                    <div style={{ fontSize: 12.5, color: "var(--text2)", marginTop: 3 }}>{p.topic ? `Topic: ${p.topic} · ` : ""}Max {p.maxMarks} marks{p.courseTitle ? ` · ${p.courseTitle}` : ""} · by {p.adminName}</div>
+                  </div>
+                  <span className="badge" style={{ background: `${sc}20`, color: sc }}>{sl}</span>
+                </div>
+                {p.description && <div style={{ fontSize: 13.5, color: "var(--text)", marginTop: 10, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{p.description}</div>}
+                {p.status === "graded" ? (
+                  <div style={{ marginTop: 14, background: `${B.success}12`, border: `1px solid ${B.success}44`, borderRadius: 10, padding: 14 }}>
+                    <div style={{ fontSize: 22, fontWeight: 900, color: B.success }}>{p.marks}/{p.maxMarks}</div>
+                    <div style={{ fontSize: 13, color: "var(--text)", marginTop: 2 }}>+{p.marks} XP earned 🎉</div>
+                    {p.feedback && <div style={{ fontSize: 13, color: "var(--text2)", marginTop: 8 }}><b>Feedback:</b> {p.feedback}</div>}
+                    {p.link && <div style={{ fontSize: 12, marginTop: 8 }}>Your submission: <a href={p.link} target="_blank" rel="noreferrer" style={{ color: B.orange }}>{p.link}</a></div>}
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 14 }}>
+                    <div className="form-group"><label className="form-label">Submission link (GitHub / Drive / etc.)</label><input className="input-field" placeholder="https://..." value={linkVal} onChange={e => setI(p.id, { link: e.target.value })} /></div>
+                    <div className="form-group"><label className="form-label">Note (optional)</label><textarea className="input-field" rows={2} placeholder="Anything you want your admin to know" value={noteVal} onChange={e => setI(p.id, { note: e.target.value })} style={{ resize: "vertical" }} /></div>
+                    <button className="btn btn-primary" onClick={() => submit(p)}><Ico n="send" s={14} />{p.status === "submitted" ? "Re-submit" : "Submit"}</button>
+                    {p.status === "submitted" && <span style={{ fontSize: 12, color: "var(--text2)", marginLeft: 10 }}>Submitted — you can update it until it's graded.</span>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ─── MAIN APP ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState("landing");
@@ -4657,6 +4902,7 @@ export default function App() {
     { id: "authorities", label: "Authorities", icon: "shield" },
     { id: "students", label: "All Students", icon: "user" },
     { id: "courses", label: "All Courses", icon: "book" },
+    { id: "projects", label: "Projects", icon: "assign" },
     { id: "quiz", label: "Quizzes", icon: "quiz" },
     { id: "assign", label: "Materials", icon: "book" },
     { id: "forum", label: "Forum", icon: "forum" },
@@ -4667,6 +4913,7 @@ export default function App() {
     { id: "dashboard", label: "Dashboard", icon: "home" },
     { id: "students", label: "My Students", icon: "users" },
     { id: "courses", label: "My Courses", icon: "book" },
+    { id: "projects", label: "Projects", icon: "assign" },
     { id: "quiz", label: "Quizzes", icon: "quiz" },
     { id: "assign", label: "Materials", icon: "book" },
     { id: "forum", label: "Forum", icon: "forum" },
@@ -4676,6 +4923,7 @@ export default function App() {
   const NAV_STUDENT = [
     { id: "dashboard", label: "Dashboard", icon: "home" },
     { id: "courses", label: "My Courses", icon: "book" },
+    { id: "projects", label: "My Projects", icon: "assign" },
     { id: "quiz", label: "Quizzes", icon: "quiz" },
     { id: "code", label: "Playground", icon: "code" },
     { id: "ai", label: "AI Tutor", icon: "ai" },
@@ -4707,6 +4955,7 @@ export default function App() {
       if (page === "authorities") return <SuperAuthoritiesPage />;
       if (page === "students") return <AdminStudentsPage batches={batches} courses={courses} />;
       if (page === "courses") return <AdminCoursesPage user={user} onCourseChange={() => GET("/courses").then(setCourses)} />;
+      if (page === "projects") return <AdminProjectsPage batches={batches} courses={courses} />;
       if (page === "quiz") return <AdminQuizPage />;
       if (page === "assign") return <AssignmentsPage user={user} />;
       if (page === "forum") return <ForumPage user={user} />;
@@ -4717,6 +4966,7 @@ export default function App() {
       if (page === "dashboard") return <AdminDashboard />;
       if (page === "students") return <AdminStudentsPage batches={batches} courses={courses} />;
       if (page === "courses") return <AdminCoursesPage user={user} onCourseChange={() => GET("/courses").then(setCourses)} />;
+      if (page === "projects") return <AdminProjectsPage batches={batches} courses={courses} />;
       if (page === "quiz") return <AdminQuizPage />;
       if (page === "assign") return <AssignmentsPage user={user} />;
       if (page === "forum") return <ForumPage user={user} />;
@@ -4728,6 +4978,7 @@ export default function App() {
     // Student
     if (page === "dashboard") return <StudentDashboard user={user} studentId={studentId} onOpenCourse={openCourse} />;
     if (page === "courses") return <StudentCoursesPage openCourseId={openCourseId} onConsumeOpen={() => setOpenCourseId(null)} />;
+    if (page === "projects") return <StudentProjectsPage />;
     if (page === "quiz") return <StudentQuizPage />;
     if (page === "code") return <CodingPage />;
     if (page === "ai") return <AITutorPage />;

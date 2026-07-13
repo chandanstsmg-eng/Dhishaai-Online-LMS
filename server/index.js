@@ -58,6 +58,7 @@ let DB = {
   batches: [],
   authorities: [],  // { id, userId, name, email, batchIds[], phone, createdAt } — read-only batch monitors
   enroll_requests: [], // { id, studentId, studentName, courseId, courseTitle, status:'pending'|'approved'|'rejected', batchId, requestedAt, decidedAt, decidedBy }
+  projects: [],     // { id, title, topic, description, assignType:'student'|'batch', studentId, batchId, courseId, maxMarks, adminId, adminName, createdAt, submissions:[{ studentId, studentName, link, note, submittedAt, marks, feedback, gradedAt, xpAwarded }] }
 };
 
 function loadDB() {
@@ -308,6 +309,7 @@ function studentReport(s) {
   const lastActivity = DB.progress.filter(p => p.studentId === s.id).map(p => p.lastActivity).filter(Boolean).sort().reverse()[0] || null;
   return {
     id: s.id, name: s.name, email: s.email, phone: s.phone || '',
+    experience: s.experience || '', company: s.company || '', qualification: s.qualification || '',
     batchId: s.batchId, batchName: batch?.name || s.batchId || '—',
     xp: s.xp || 0, streak: s.streak || 0, badges: s.badges || 0,
     courses, avgProgress, quizResults: results, quizAvg,
@@ -718,6 +720,138 @@ app.post('/api/enroll-requests/:id/reject', auth, adminOrSuper, (req, res) => {
   res.json({ success: true });
 });
 
+// ── PROJECTS (admin assigns → student submits → admin grades → XP) ────────────
+// Admin/super creates & assigns a project to one student OR a whole batch.
+app.post('/api/projects', auth, adminOrSuper, (req, res) => {
+  const { title, topic, description, assignType, studentId, batchId, courseId, maxMarks } = req.body;
+  if (!title) return res.status(400).json({ error: 'Title required' });
+  if (!['student', 'batch'].includes(assignType)) return res.status(400).json({ error: 'assignType must be student or batch' });
+  if (!Array.isArray(DB.projects)) DB.projects = [];
+  const adminRec = req.user.role === 'admin' ? getAdminRecord(req.user.id) : null;
+  let sId = null, bId = null;
+  if (assignType === 'student') {
+    sId = Number(studentId);
+    const student = DB.students.find(s => s.id === sId);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+    if (req.user.role === 'admin' && !studentsInCourses(adminCourseIds(adminRec?.id)).includes(sId)) return res.status(403).json({ error: 'Not your student' });
+  } else {
+    bId = String(batchId || '');
+    if (!bId) return res.status(400).json({ error: 'Batch required' });
+  }
+  const proj = {
+    id: uuidv4(), title, topic: topic || '', description: description || '',
+    assignType, studentId: sId, batchId: bId,
+    courseId: courseId ? Number(courseId) : null,
+    maxMarks: Number(maxMarks) > 0 ? Number(maxMarks) : 100,
+    adminId: adminRec?.id || null, adminName: req.user.name,
+    createdAt: new Date().toISOString(), submissions: [],
+  };
+  DB.projects.push(proj);
+  const recipients = assignType === 'student' ? DB.students.filter(s => s.id === sId) : DB.students.filter(s => s.batchId === bId);
+  recipients.forEach(s => notify(s.userId, 'New project assigned 📌', `You've been assigned the project "${title}". Open Projects to submit your work.`, 'project'));
+  saveDB();
+  res.status(201).json(proj);
+});
+
+// Admin/super: list projects they created (super sees all), each with per-student rows.
+app.get('/api/projects', auth, adminOrSuper, (req, res) => {
+  let list = DB.projects || [];
+  if (req.user.role !== 'superadmin') {
+    const adminRec = getAdminRecord(req.user.id);
+    list = list.filter(p => p.adminId === adminRec?.id);
+  }
+  const out = list.map(p => {
+    const recipients = p.assignType === 'student'
+      ? DB.students.filter(x => x.id === p.studentId)
+      : DB.students.filter(x => x.batchId === p.batchId);
+    const b = p.assignType === 'batch' ? DB.batches.find(x => x.id === p.batchId) : null;
+    const assigneeName = p.assignType === 'student' ? (recipients[0]?.name || 'Student') : (b?.name || p.batchId);
+    const rows = recipients.map(s => {
+      const sub = (p.submissions || []).find(x => x.studentId === s.id);
+      return { studentId: s.id, studentName: s.name, link: sub?.link || '', note: sub?.note || '', submittedAt: sub?.submittedAt || null, marks: sub?.marks ?? null, feedback: sub?.feedback || '', gradedAt: sub?.gradedAt || null };
+    });
+    return { ...p, assigneeName, rows };
+  }).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  res.json(out);
+});
+
+// Student: projects assigned to me (individually or via my batch) + my submission.
+app.get('/api/my-projects', auth, (req, res) => {
+  const student = DB.students.find(s => s.userId === req.user.id);
+  if (!student) return res.json([]);
+  const mine = (DB.projects || []).filter(p =>
+    (p.assignType === 'student' && p.studentId === student.id) ||
+    (p.assignType === 'batch' && p.batchId && p.batchId === student.batchId)
+  );
+  res.json(mine.map(p => {
+    const sub = (p.submissions || []).find(x => x.studentId === student.id) || null;
+    const course = p.courseId ? DB.courses.find(c => c.id === p.courseId) : null;
+    return {
+      id: p.id, title: p.title, topic: p.topic, description: p.description, maxMarks: p.maxMarks,
+      adminName: p.adminName, createdAt: p.createdAt, courseTitle: course?.title || null,
+      link: sub?.link || '', note: sub?.note || '', submittedAt: sub?.submittedAt || null,
+      marks: sub?.marks ?? null, feedback: sub?.feedback || '', gradedAt: sub?.gradedAt || null,
+      status: sub?.gradedAt ? 'graded' : sub?.submittedAt ? 'submitted' : 'assigned',
+    };
+  }).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)));
+});
+
+// Student submits (a link + optional note).
+app.post('/api/projects/:id/submit', auth, (req, res) => {
+  const student = DB.students.find(s => s.userId === req.user.id);
+  if (!student) return res.status(403).json({ error: 'Students only' });
+  const p = (DB.projects || []).find(x => x.id === req.params.id);
+  if (!p) return res.status(404).json({ error: 'Project not found' });
+  const eligible = (p.assignType === 'student' && p.studentId === student.id) || (p.assignType === 'batch' && p.batchId === student.batchId);
+  if (!eligible) return res.status(403).json({ error: 'Not assigned to you' });
+  if (!Array.isArray(p.submissions)) p.submissions = [];
+  let sub = p.submissions.find(x => x.studentId === student.id);
+  if (!sub) { sub = { studentId: student.id, studentName: student.name }; p.submissions.push(sub); }
+  sub.link = String(req.body.link || '').slice(0, 500);
+  sub.note = String(req.body.note || '').slice(0, 2000);
+  sub.submittedAt = new Date().toISOString();
+  const owner = p.adminId ? DB.admins.find(a => a.id === p.adminId) : null;
+  if (owner?.userId) notify(owner.userId, 'Project submitted', `${student.name} submitted the project "${p.title}".`, 'project_submitted');
+  else DB.users.filter(u => u.role === 'superadmin').forEach(u => notify(u.id, 'Project submitted', `${student.name} submitted "${p.title}".`, 'project_submitted'));
+  saveDB();
+  res.json({ success: true });
+});
+
+// Admin/super grades one student's submission. XP = marks, applied as a DELTA so
+// re-grading never double-counts and never misses.
+app.post('/api/projects/:id/grade', auth, adminOrSuper, (req, res) => {
+  const p = (DB.projects || []).find(x => x.id === req.params.id);
+  if (!p) return res.status(404).json({ error: 'Project not found' });
+  if (req.user.role === 'admin' && p.adminId !== getAdminRecord(req.user.id)?.id) return res.status(403).json({ error: 'Not your project' });
+  const studentId = Number(req.body.studentId);
+  const sidx = DB.students.findIndex(s => s.id === studentId);
+  if (sidx < 0) return res.status(404).json({ error: 'Student not found' });
+  const marks = Math.max(0, Math.min(Number(req.body.marks) || 0, p.maxMarks));
+  if (!Array.isArray(p.submissions)) p.submissions = [];
+  let sub = p.submissions.find(x => x.studentId === studentId);
+  if (!sub) { sub = { studentId, studentName: DB.students[sidx].name }; p.submissions.push(sub); }
+  const prevXp = sub.xpAwarded || 0;   // idempotent XP accounting
+  const newXp = marks;
+  DB.students[sidx].xp = Math.max(0, (DB.students[sidx].xp || 0) + (newXp - prevXp));
+  sub.marks = marks; sub.feedback = String(req.body.feedback || '').slice(0, 2000); sub.gradedAt = new Date().toISOString(); sub.xpAwarded = newXp;
+  notify(DB.students[sidx].userId, 'Project graded ✅', `Your project "${p.title}" was graded ${marks}/${p.maxMarks}. XP earned for it: ${newXp}.`, 'project_graded');
+  saveDB();
+  res.json({ success: true, awardedXp: newXp });
+});
+
+// Admin/super deletes a project; reclaims any XP it awarded so totals stay exact.
+app.delete('/api/projects/:id', auth, adminOrSuper, (req, res) => {
+  const p = (DB.projects || []).find(x => x.id === req.params.id);
+  if (!p) return res.status(404).json({ error: 'Not found' });
+  if (req.user.role === 'admin' && p.adminId !== getAdminRecord(req.user.id)?.id) return res.status(403).json({ error: 'Not yours' });
+  (p.submissions || []).forEach(sub => {
+    if (sub.xpAwarded) { const i = DB.students.findIndex(s => s.id === sub.studentId); if (i >= 0) DB.students[i].xp = Math.max(0, (DB.students[i].xp || 0) - sub.xpAwarded); }
+  });
+  DB.projects = DB.projects.filter(x => x.id !== req.params.id);
+  saveDB();
+  res.json({ success: true });
+});
+
 app.post('/api/courses', auth, adminOrSuper, (req, res) => {
   const { title, category, lessons, duration, description, color } = req.body;
   if (!title) return res.status(400).json({ error: 'Title required' });
@@ -767,6 +901,21 @@ app.put('/api/courses/:id/quiz-batch', auth, adminOrSuper, (req, res) => {
   if (!batchId) return res.status(400).json({ error: 'batchId required' });
   if (!DB.courses[idx].quizBatch) DB.courses[idx].quizBatch = {};
   DB.courses[idx].quizBatch[batchId] = !!enabled;
+  saveDB();
+  res.json(DB.courses[idx]);
+});
+
+// Admin controls which lessons/modules students can access (teaching pace).
+// manualRelease=false -> auto-unlock by completion (default). true -> only the
+// module indexes in releasedModules are unlocked for students.
+app.put('/api/courses/:id/lesson-release', auth, adminOrSuper, (req, res) => {
+  const id  = parseInt(req.params.id);
+  const idx = DB.courses.findIndex(c => c.id === id);
+  if (idx < 0) return res.status(404).json({ error: 'Not found' });
+  if (!canEditCourse(req, DB.courses[idx])) return res.status(403).json({ error: 'Not your course' });
+  const { manualRelease, releasedModules } = req.body;
+  if (manualRelease !== undefined) DB.courses[idx].manualRelease = !!manualRelease;
+  if (Array.isArray(releasedModules)) DB.courses[idx].releasedModules = [...new Set(releasedModules.map(Number).filter(n => Number.isInteger(n) && n >= 0))];
   saveDB();
   res.json(DB.courses[idx]);
 });
@@ -863,7 +1012,7 @@ app.get('/api/students', auth, adminOrSuper, (req, res) => {
 });
 
 app.post('/api/students', auth, adminOrSuper, (req, res) => {
-  const { name, email, password, batchId, phone, enrolledCourses } = req.body;
+  const { name, email, password, batchId, phone, enrolledCourses, experience, company, qualification } = req.body;
   if (!name || !email) return res.status(400).json({ error: 'Name and email required' });
   if (DB.users.find(u => u.email.toLowerCase() === email.toLowerCase())) return res.status(409).json({ error: 'Email already exists' });
 
@@ -878,7 +1027,7 @@ app.post('/api/students', auth, adminOrSuper, (req, res) => {
   const uid = uuidv4();
   DB.users.push({ id: uid, email, password: bcrypt.hashSync(password || 'student123', 10), role: 'student', name, createdAt: new Date().toISOString() });
   const sid = (DB.students.length > 0 ? Math.max(...DB.students.map(s=>s.id)) : 0) + 1;
-  DB.students.push({ id: sid, userId: uid, name, email, batchId: batchId||'', xp: 0, streak: 0, badges: 0, phone: phone||'', joined: new Date().toISOString() });
+  DB.students.push({ id: sid, userId: uid, name, email, batchId: batchId||'', xp: 0, streak: 0, badges: 0, phone: phone||'', experience: experience||'', company: company||'', qualification: qualification||'', joined: new Date().toISOString() });
 
   allowedCourses.forEach(cid => {
     if (!DB.enrollments.find(e => e.studentId === sid && e.courseId === cid)) {
@@ -904,8 +1053,16 @@ app.put('/api/students/:id', auth, adminOrSuper, (req, res) => {
     if (!myStudentIds.includes(id)) return res.status(403).json({ error: 'Not your student' });
   }
 
-  const { name, batchId, phone, enrolledCourses } = req.body;
-  DB.students[idx] = { ...DB.students[idx], name: name||DB.students[idx].name, batchId: batchId||DB.students[idx].batchId, phone: phone||DB.students[idx].phone };
+  const { name, batchId, phone, enrolledCourses, experience, company, qualification } = req.body;
+  DB.students[idx] = {
+    ...DB.students[idx],
+    name: name || DB.students[idx].name,
+    batchId: batchId || DB.students[idx].batchId,
+    phone: phone ?? DB.students[idx].phone,
+    experience: experience ?? (DB.students[idx].experience || ''),
+    company: company ?? (DB.students[idx].company || ''),
+    qualification: qualification ?? (DB.students[idx].qualification || ''),
+  };
 
   if (enrolledCourses !== undefined) {
     // Admin can only add/remove from their own courses — preserve other courses
@@ -1539,10 +1696,10 @@ app.get('/api/admin/export/students.csv', auth, adminOrSuper, (req, res) => {
     const ids = studentsInCourses(adminCourseIds(adminRec?.id));
     students = DB.students.filter(s => ids.includes(s.id));
   }
-  const headers = ['Name', 'Email', 'Phone', 'Batch', 'Courses Enrolled', 'Avg Progress %', 'Quiz Avg %', 'XP', 'Streak (days)', 'Status', 'Last Active', 'Joined'];
+  const headers = ['Name', 'Email', 'Phone', 'Qualification', 'Experience', 'Company', 'Batch', 'Courses Enrolled', 'Avg Progress %', 'Quiz Avg %', 'XP', 'Streak (days)', 'Status', 'Last Active', 'Joined'];
   const rows = students.map(s => {
     const r = studentReport(s);
-    return [r.name, r.email, r.phone, r.batchName, r.courses.length, r.avgProgress, r.quizAvg, r.xp, r.streak, r.active ? 'Active' : 'Inactive', inDate(r.lastActivity), inDate(s.joined)];
+    return [r.name, r.email, r.phone, r.qualification, r.experience, r.company, r.batchName, r.courses.length, r.avgProgress, r.quizAvg, r.xp, r.streak, r.active ? 'Active' : 'Inactive', inDate(r.lastActivity), inDate(s.joined)];
   });
   sendCsv(res, `dhishaai_students_${Date.now()}.csv`, toCsv(headers, rows));
 });
