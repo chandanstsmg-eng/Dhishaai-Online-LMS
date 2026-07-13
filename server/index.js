@@ -235,7 +235,8 @@ function seedDB() {
   ];
 
   DB.notifications = [
-    { id: uuidv4(), userId: null, title: 'Welcome to DhishaAI LMS!', body: 'Your multi-subject learning platform is ready.', read: false, createdAt: new Date().toISOString() },
+    // `welcome: true` marks this as permanent — it is never auto-expired.
+    { id: uuidv4(), userId: null, title: 'Welcome to DhishaAI LMS!', body: 'Your multi-subject learning platform is ready.', read: false, welcome: true, createdAt: new Date().toISOString() },
   ];
 
   DB.assignments = [];
@@ -1301,7 +1302,18 @@ app.post('/api/batches', auth, adminOrSuper, (req, res) => {
 });
 
 // ── NOTIFICATIONS ─────────────────────────────────────────────────────────────
+const NOTIF_TTL_MS = Number(process.env.NOTIF_TTL_MS) || 7 * 24 * 60 * 60 * 1000; // notifications auto-expire after 1 week
+// The welcome broadcast is permanent; everything else disappears after a week.
+const isWelcomeNotif = n => n.welcome === true || /^welcome/i.test(n.title || '');
+function pruneExpiredNotifications() {
+  const cutoff = Date.now() - NOTIF_TTL_MS;
+  const before = DB.notifications.length;
+  DB.notifications = DB.notifications.filter(n =>
+    isWelcomeNotif(n) || !n.createdAt || new Date(n.createdAt).getTime() >= cutoff);
+  if (DB.notifications.length !== before) saveDB();
+}
 app.get('/api/notifications', auth, (req, res) => {
+  pruneExpiredNotifications();
   res.json(DB.notifications.filter(n => !n.userId || n.userId === req.user.id));
 });
 
