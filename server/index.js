@@ -1225,6 +1225,33 @@ app.put('/api/progress', auth, (req, res) => {
   res.json({ success: true });
 });
 
+// Record that a student has read a study material (PDF) all the way to the last
+// page. The module can only be completed — and the next module/quiz unlocked —
+// once every material attached to it has been read to the end.
+app.post('/api/progress/material-viewed', auth, (req, res) => {
+  const { courseId, materialId } = req.body;
+  const student = DB.students.find(s => s.userId === req.user.id);
+  if (!student) return res.status(400).json({ error: 'Student not found' });
+  const cid = Number(courseId);
+  // Must be enrolled in the course this material belongs to.
+  if (!DB.enrollments.some(e => e.studentId === student.id && e.courseId === cid))
+    return res.status(403).json({ error: 'Not enrolled in this course' });
+  const mat = DB.materials.find(m => String(m.id) === String(materialId) && Number(m.courseId) === cid);
+  if (!mat) return res.status(404).json({ error: 'Material not found' });
+  let prog = DB.progress.find(p => p.studentId === student.id && p.courseId === cid);
+  if (!prog) {
+    prog = { id: uuidv4(), studentId: student.id, courseId: cid, percent: 0, completedLessons: [], viewedMaterials: [], lastActivity: new Date().toISOString() };
+    DB.progress.push(prog);
+  }
+  if (!Array.isArray(prog.viewedMaterials)) prog.viewedMaterials = [];
+  if (!prog.viewedMaterials.some(v => String(v) === String(materialId))) {
+    prog.viewedMaterials.push(materialId);
+    prog.lastActivity = new Date().toISOString();
+    saveDB();
+  }
+  res.json({ success: true, viewedMaterials: prog.viewedMaterials });
+});
+
 // ── ANALYTICS (admin scoped) ──────────────────────────────────────────────────
 app.get('/api/analytics/overview', auth, adminOrSuper, (req, res) => {
   if (req.user.role === 'superadmin') {

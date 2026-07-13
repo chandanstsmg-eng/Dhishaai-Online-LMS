@@ -589,10 +589,11 @@ function parseMcqLines(lines) {
 // View-only PDF slideshow for students. Renders the PDF page-by-page onto a
 // canvas (Prev / Next, page counter, full-screen) with NO download and no
 // right-click / Ctrl+S / Ctrl+P — the original file is never handed over.
-const SlideViewer = ({ materialId, title, onClose }) => {
+const SlideViewer = ({ materialId, title, onClose, onReachedEnd }) => {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
   const containerRef = useRef(null);
+  const reachedRef = useRef(false); // fire onReachedEnd only once per material
   const [pdf, setPdf] = useState(null);
   const [imgSrc, setImgSrc] = useState(null);
   const [page, setPage] = useState(1);
@@ -686,6 +687,22 @@ const SlideViewer = ({ materialId, title, onClose }) => {
     document.body.style.overflow = "hidden";
     return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = prev; };
   }, [numPages, onClose]);
+
+  // Reset the "reached the end" latch whenever a new material is opened.
+  useEffect(() => { reachedRef.current = false; }, [materialId]);
+
+  // Consider the material "read to the end" when the student reaches the last PDF
+  // page (or opens a single-page PDF / image). Fires the callback exactly once so
+  // the parent can unlock module completion.
+  useEffect(() => {
+    if (reachedRef.current) return;
+    const pdfAtEnd = numPages > 0 && page >= numPages;
+    const imageOpened = !!imgSrc;
+    if (pdfAtEnd || imageOpened) {
+      reachedRef.current = true;
+      onReachedEnd && onReachedEnd();
+    }
+  }, [page, numPages, imgSrc]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return createPortal(
     <div ref={containerRef} onContextMenu={e => e.preventDefault()} style={{ position: "fixed", inset: 0, height: "100dvh", zIndex: 100000, background: "rgba(8,12,20,.97)", display: "flex", flexDirection: "column", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" }}>
@@ -2291,6 +2308,13 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
     const done = prog?.completedLessons || [];
     const topicDone = gi => done.includes(gi);
     const quizPassed = quiz => !!quiz && results.some(r => r.quizId === quiz.id && r.total && r.score / r.total >= 0.7);
+    // Materials the student has read all the way to the last page.
+    const viewed = prog?.viewedMaterials || [];
+    const materialRead = id => viewed.some(v => String(v) === String(id));
+    const materialsForModule = m => materials.filter(x => Number(x.courseId) === selected.id && x.moduleIndex === m.index);
+    // A module can only be completed once EVERY attached PDF has been read to the
+    // end. A module with no material has nothing to read, so this is vacuously true.
+    const moduleMaterialsRead = m => materialsForModule(m).every(mat => materialRead(mat.id));
     const moduleTopicsDone = m => m.topics.every(t => topicDone(t.globalIndex));
     const moduleComplete = m => moduleTopicsDone(m) && (!m.quiz || quizPassed(m.quiz));
     // When the admin manually controls release, only the released modules are open;
@@ -2310,8 +2334,21 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
       ? Math.round(quizzesInCourse.reduce((a, q) => a + bestPct(q.quiz.id), 0) / quizzesInCourse.length)
       : 0;
 
+    // Record that the student reached the last page of a material's PDF. This is
+    // what unlocks the "Mark Module as Complete" action for that module.
+    const markMaterialRead = async mat => {
+      if (!mat || materialRead(mat.id)) return;
+      try {
+        await POST("/progress/material-viewed", { courseId: selected.id, materialId: mat.id });
+        loadProgress();
+        show("You've read the material to the end — you can now complete this module. ✓");
+      } catch (e) { /* non-blocking; they can re-open the material */ }
+    };
+
     // Mark a whole module as studied — records real completion of its topics.
+    // Guarded: every attached PDF must be read to the end first.
     const markModule = async m => {
+      if (!moduleMaterialsRead(m)) { show("Open the material and read to the last page before completing this module.", "error"); return; }
       const add = m.topics.map(t => t.globalIndex).filter(gi => !done.includes(gi));
       if (!add.length) return;
       const next = [...done, ...add];
@@ -2473,7 +2510,7 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
           </div>
         )}
 
-        {viewer && <SlideViewer materialId={viewer.id} title={viewer.title} onClose={() => setViewer(null)} />}
+        {viewer && <SlideViewer materialId={viewer.id} title={viewer.title} onClose={() => setViewer(null)} onReachedEnd={() => markMaterialRead(viewer)} />}
 
         {lessons.length > 0 && (
           <div className="card-flat" style={{ padding: "clamp(16px,3vw,22px)", marginBottom: 20 }}>
@@ -2498,6 +2535,8 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
               const unlocked = moduleUnlocked(m);
               const complete = moduleComplete(m);
               const topicsDone = moduleTopicsDone(m);
+              const modMats = materialsForModule(m);
+              const materialsRead = moduleMaterialsRead(m); // all PDFs read to the end
               return (
                 <div key={m.index} className="card-flat" style={{ padding: 0, overflow: "hidden", opacity: unlocked ? 1 : .6 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", background: "var(--surface2)", borderBottom: "1px solid var(--border)" }}>
@@ -2515,18 +2554,21 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
 
                   {unlocked && (
                     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
-                      {materials.filter(x => Number(x.courseId) === selected.id && x.moduleIndex === m.index).map(mat => (
-                        <div key={mat.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 10, border: `1.5px solid ${B.navy}33`, background: `${B.navy}08` }}>
-                          <div style={{ width: 34, height: 34, borderRadius: 9, background: `${B.navy}18`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                            <Ico n="book" s={17} c={B.navy} />
+                      {modMats.map(mat => {
+                        const read = materialRead(mat.id);
+                        return (
+                        <div key={mat.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 10, border: `1.5px solid ${read ? B.success : B.navy}33`, background: `${read ? B.success : B.navy}08` }}>
+                          <div style={{ width: 34, height: 34, borderRadius: 9, background: `${read ? B.success : B.navy}18`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                            <Ico n={read ? "check" : "book"} s={17} c={read ? B.success : B.navy} />
                           </div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)" }}>{mat.title}</div>
-                            <div style={{ fontSize: 12, color: "var(--text2)" }}>📊 Presentation · view only</div>
+                            <div style={{ fontSize: 12, color: read ? B.success : "var(--text2)", fontWeight: read ? 700 : 400 }}>{read ? "✓ Read to the end" : "📊 Read to the last page to unlock this module"}</div>
                           </div>
-                          <button className="btn btn-primary btn-sm" onClick={() => setViewer(mat)}><Ico n="play" s={13} />View</button>
+                          <button className="btn btn-primary btn-sm" onClick={() => setViewer(mat)}><Ico n="play" s={13} />{read ? "Review" : "Read"}</button>
                         </div>
-                      ))}
+                        );
+                      })}
                       {/* Syllabus — what this module covers (read-only) */}
                       <div style={{ padding: "12px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--surface)" }}>
                         <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text2)", letterSpacing: .5, textTransform: "uppercase", marginBottom: 10 }}>Topics covered in this module</div>
@@ -2541,7 +2583,12 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
                         </div>
                         {topicsDone
                           ? <div style={{ marginTop: 12, fontSize: 13, color: B.success, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}><Ico n="check" s={14} c={B.success} />Module studied</div>
-                          : <button className="btn btn-primary btn-sm" style={{ marginTop: 12 }} onClick={() => markModule(m)}><Ico n="check" s={13} />Mark Module as Complete</button>}
+                          : materialsRead
+                            ? <button className="btn btn-primary btn-sm" style={{ marginTop: 12 }} onClick={() => markModule(m)}><Ico n="check" s={13} />Mark Module as Complete</button>
+                            : <div style={{ marginTop: 12, fontSize: 13, color: "var(--text2)", fontWeight: 600, display: "flex", alignItems: "center", gap: 8, background: `${B.orange}12`, border: `1px solid ${B.orange}44`, borderRadius: 10, padding: "10px 14px" }}>
+                                <Ico n="lock" s={14} c={B.orange} />
+                                {modMats.length > 1 ? "Read every material above to the last page to complete this module." : "Open the material above and read to the last page to complete this module."}
+                              </div>}
                       </div>
 
                       {/* Module quiz gate */}
@@ -3436,7 +3483,8 @@ const AssignmentsPage = ({ user }) => {
   return (
     <div className="fadeIn">
       {toastEl}
-      {viewer && <SlideViewer materialId={viewer.id} title={viewer.title} onClose={() => setViewer(null)} />}
+      {viewer && <SlideViewer materialId={viewer.id} title={viewer.title} onClose={() => setViewer(null)}
+        onReachedEnd={!isAdmin && viewer.courseId ? () => { POST("/progress/material-viewed", { courseId: viewer.courseId, materialId: viewer.id }).catch(() => {}); } : undefined} />}
       <input ref={fileInputRef} type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.txt,.zip" style={{ display: "none" }} onChange={pickFile} />
 
       {/* Page Header */}
