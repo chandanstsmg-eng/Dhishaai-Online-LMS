@@ -20,6 +20,7 @@ const bcrypt  = require('bcryptjs');
 const jwt     = require('jsonwebtoken');
 const fs      = require('fs');
 const path    = require('path');
+const os      = require('os');
 const morgan  = require('morgan');
 const { v4: uuidv4 } = require('uuid');
 const store   = require('./db');   // SQLite persistence layer (with JSON fallback)
@@ -1827,9 +1828,28 @@ if (fs.existsSync(distIndex)) {
 }
 
 loadDB();
+// Find this machine's LAN (Wi-Fi/Ethernet) IPv4 so others on the same network
+// can be told exactly which address to open.
+function lanIPs() {
+  const out = [];
+  const ifaces = os.networkInterfaces();
+  for (const name of Object.keys(ifaces)) {
+    for (const net of ifaces[name] || []) {
+      if (net.family === 'IPv4' && !net.internal && !net.address.startsWith('169.254.')) out.push(net.address);
+    }
+  }
+  return out;
+}
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n🚀 DhishaAI Enterprise LMS v5.0`);
-  console.log(`\n✅ Open your browser at: http://localhost:${PORT}`);
+  console.log(`\n✅ On this PC:        http://localhost:${PORT}`);
+  const ips = lanIPs();
+  if (ips.length) {
+    console.log(`\n📶 On the same Wi-Fi (share these with your users):`);
+    ips.forEach(ip => console.log(`   → http://${ip}:${PORT}`));
+    console.log(`   (If it doesn't open on other devices, allow TCP port ${PORT} through Windows Firewall.)`);
+  }
   console.log(`\n👑 Super Admin : superadmin@dhishaai.com / superadmin123`);
   console.log(`📘 Python Admin: priya@dhishaai.com     / python123`);
   console.log(`📗 SQL Admin   : ravi@dhishaai.com      / sql123`);

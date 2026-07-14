@@ -819,14 +819,14 @@ const LandingPage = ({ onGetStarted }) => {
       {/* Hero Section */}
       <div style={{ textAlign: "center", padding: "clamp(48px,8vw,90px) clamp(16px,4vw,48px) clamp(32px,5vw,64px)", maxWidth: 860, margin: "0 auto" }}>
         <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "rgba(232,119,34,.15)", border: "1px solid rgba(232,119,34,.3)", borderRadius: 20, padding: "6px 16px", fontSize: 13, color: B.orange, fontWeight: 600, marginBottom: 28 }}>
-          <Ico n="zap" s={14} c={B.orange} /> Next-Gen Analytics Training
+          <Ico n="zap" s={14} c={B.orange} /> Learn-->Practice-->Get Hired
         </div>
         <h1 style={{ fontSize: "clamp(38px,5.5vw,72px)", fontWeight: 900, color: "#fff", lineHeight: 1.08, marginBottom: 22, letterSpacing: "-1px" }}>
-          Master Data Analytics.<br />
+          Master In-Demand Skills.<br />
           <span style={{ color: B.orange, textShadow: `0 0 40px ${B.orange}55` }}>Land Your Dream Job.</span>
         </h1>
         <p style={{ fontSize: "clamp(15px,1.8vw,19px)", color: "rgba(255,255,255,.68)", marginBottom: 40, maxWidth: 580, margin: "0 auto 40px", lineHeight: 1.6 }}>
-          Structured courses, 24/7 AI tutoring, live coding practice, and placement support — everything you need to become a data professional.
+          Structured courses, 24/7 AI tutoring, live coding practice, and placement support — everything you need to become a job-ready professional.
         </p>
         <div style={{ display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap" }}>
           <button className="btn btn-primary btn-lg" onClick={onGetStarted}>Start Learning Free</button>
