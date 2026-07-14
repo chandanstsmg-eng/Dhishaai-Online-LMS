@@ -603,6 +603,7 @@ const SlideViewer = ({ materialId, title, onClose, onReachedEnd }) => {
   const [isFs, setIsFs] = useState(false);
   const [fit, setFit] = useState(0); // bump to re-fit on resize / orientation / fullscreen
   const [speaking, setSpeaking] = useState(false); // read-aloud (text-to-speech) active
+  const [showAudioOpts, setShowAudioOpts] = useState(false); // voice/speed dropdown
   const speakingRef = useRef(false);
   const ttsSupported = typeof window !== "undefined" && "speechSynthesis" in window;
   const [voices, setVoices] = useState([]);
@@ -793,50 +794,60 @@ const SlideViewer = ({ materialId, title, onClose, onReachedEnd }) => {
   const changeRate = r => { rateRef.current = r; setRate(r); if (speakingRef.current) readAloud(); };
   const changeGender = g => { genderRef.current = g; setGender(g); if (speakingRef.current) readAloud(); };
 
+  // Compact audio-settings dropdown (voice + speed) — keeps the toolbar uncluttered,
+  // especially on phones. `pos` places it under whichever gear button opened it.
+  const renderAudioPanel = pos => (
+    <div style={{ position: "absolute", zIndex: 6, background: "#1b2536", border: "1px solid rgba(255,255,255,.15)", borderRadius: 12, padding: 14, boxShadow: "0 12px 40px rgba(0,0,0,.55)", width: 220, ...pos }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,.5)", textTransform: "uppercase", letterSpacing: .5, marginBottom: 8 }}>Voice</div>
+      <div style={{ display: "flex", border: "1px solid rgba(255,255,255,.2)", borderRadius: 9, overflow: "hidden", marginBottom: 14 }}>
+        <button onClick={() => changeGender("female")} style={{ flex: 1, padding: "9px 8px", fontSize: 13, fontWeight: 700, background: gender === "female" ? B.orange : "transparent", color: "#fff", border: "none", cursor: "pointer" }}>♀ Female</button>
+        <button onClick={() => changeGender("male")} style={{ flex: 1, padding: "9px 8px", fontSize: 13, fontWeight: 700, background: gender === "male" ? B.orange : "transparent", color: "#fff", border: "none", cursor: "pointer" }}>♂ Male</button>
+      </div>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,.5)", textTransform: "uppercase", letterSpacing: .5, marginBottom: 8 }}>Speed</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+        {[0.75, 1, 1.25, 1.5, 1.75, 2].map(r => (
+          <button key={r} onClick={() => changeRate(r)} style={{ padding: "8px 4px", fontSize: 12.5, fontWeight: 700, borderRadius: 8, background: rate === r ? B.orange : "rgba(255,255,255,.08)", color: "#fff", border: `1px solid ${rate === r ? B.orange : "rgba(255,255,255,.18)"}`, cursor: "pointer" }}>{r}×</button>
+        ))}
+      </div>
+    </div>
+  );
+
   // Stop narration when the material changes or the viewer unmounts.
   useEffect(() => () => stopSpeak(), []); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { stopSpeak(); }, [materialId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { stopSpeak(); setShowAudioOpts(false); }, [materialId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return createPortal(
     <div ref={containerRef} onContextMenu={e => e.preventDefault()} style={{ position: "fixed", inset: 0, height: "100dvh", zIndex: 100000, background: "rgba(8,12,20,.97)", display: "flex", flexDirection: "column", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" }}>
       {!isFs && (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 18px", color: "#fff", gap: 12 }}>
-          <div style={{ fontWeight: 700, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title || "Material"}{numPages ? ` · Page ${page}/${numPages}` : ""}</div>
-          <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-            {pdf && ttsSupported && (
-              <button onClick={toggleSpeak} className="btn btn-sm" style={{ background: speaking ? B.orange : "rgba(232,119,34,.18)", color: "#fff", border: `1px solid ${B.orange}`, fontWeight: 700 }}>
-                {speaking ? "⏸ Stop Audio" : "🔊 Read Aloud"}
-              </button>
-            )}
-            <button onClick={toggleFs} className="btn btn-secondary btn-sm">⛶ Full Screen</button>
-            <button onClick={onClose} className="btn btn-secondary btn-sm">✕ Close</button>
+        <div style={{ position: "relative", padding: "12px 14px", color: "#fff" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+            <div style={{ fontWeight: 700, fontSize: 14, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title || "Material"}{numPages ? ` · ${page}/${numPages}` : ""}</div>
+            <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
+              {pdf && ttsSupported && (
+                <>
+                  <button onClick={toggleSpeak} className="btn btn-sm" style={{ background: speaking ? B.orange : "rgba(232,119,34,.18)", color: "#fff", border: `1px solid ${B.orange}`, fontWeight: 700, padding: "7px 12px" }}>
+                    {speaking ? "⏸ Stop" : "🔊 Read Aloud"}
+                  </button>
+                  <button onClick={() => setShowAudioOpts(v => !v)} title="Voice & speed" className="btn btn-sm" style={{ background: showAudioOpts ? B.orange : "rgba(255,255,255,.1)", color: "#fff", border: "1px solid rgba(255,255,255,.25)", padding: "7px 11px", fontWeight: 700 }}>⚙</button>
+                </>
+              )}
+              <button onClick={toggleFs} title="Full screen" className="btn btn-secondary btn-sm" style={{ padding: "7px 11px" }}>⛶</button>
+              <button onClick={onClose} title="Close" className="btn btn-secondary btn-sm" style={{ padding: "7px 11px" }}>✕</button>
+            </div>
           </div>
-        </div>
-      )}
-      {!isFs && pdf && ttsSupported && (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, flexWrap: "wrap", padding: "0 14px 10px", color: "#fff" }}>
-          <span style={{ fontSize: 12, color: "rgba(255,255,255,.55)", fontWeight: 600 }}>🔊 Voice</span>
-          <div style={{ display: "inline-flex", border: "1px solid rgba(255,255,255,.25)", borderRadius: 8, overflow: "hidden" }}>
-            <button onClick={() => changeGender("female")} style={{ padding: "6px 12px", fontSize: 12.5, fontWeight: 700, background: gender === "female" ? B.orange : "transparent", color: "#fff", border: "none", cursor: "pointer" }}>♀ Female</button>
-            <button onClick={() => changeGender("male")} style={{ padding: "6px 12px", fontSize: 12.5, fontWeight: 700, background: gender === "male" ? B.orange : "transparent", color: "#fff", border: "none", cursor: "pointer" }}>♂ Male</button>
-          </div>
-          <span style={{ fontSize: 12, color: "rgba(255,255,255,.55)", fontWeight: 600, marginLeft: 6 }}>Speed</span>
-          <select value={rate} onChange={e => changeRate(Number(e.target.value))} style={{ padding: "6px 10px", fontSize: 12.5, fontWeight: 700, borderRadius: 8, background: "rgba(255,255,255,.12)", color: "#fff", border: "1px solid rgba(255,255,255,.25)", cursor: "pointer" }}>
-            <option value={0.75} style={{ color: "#000" }}>0.75× Slow</option>
-            <option value={1} style={{ color: "#000" }}>1× Normal</option>
-            <option value={1.25} style={{ color: "#000" }}>1.25×</option>
-            <option value={1.5} style={{ color: "#000" }}>1.5×</option>
-            <option value={1.75} style={{ color: "#000" }}>1.75×</option>
-            <option value={2} style={{ color: "#000" }}>2× Fast</option>
-          </select>
+          {pdf && ttsSupported && showAudioOpts && renderAudioPanel({ top: "calc(100% - 2px)", right: 10 })}
         </div>
       )}
       {isFs && (
-        <div style={{ position: "absolute", top: "max(10px, env(safe-area-inset-top))", right: 10, zIndex: 5, display: "flex", gap: 8 }}>
+        <div style={{ position: "absolute", top: "max(10px, env(safe-area-inset-top))", right: 10, zIndex: 5, display: "flex", gap: 8, alignItems: "flex-start" }}>
           {pdf && ttsSupported && (
-            <button onClick={toggleSpeak} style={{ background: speaking ? B.orange : "rgba(0,0,0,.55)", color: "#fff", border: `1px solid ${B.orange}`, borderRadius: 8, padding: "7px 12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{speaking ? "⏸ Stop" : "🔊 Read"}</button>
+            <>
+              <button onClick={toggleSpeak} style={{ background: speaking ? B.orange : "rgba(0,0,0,.55)", color: "#fff", border: `1px solid ${B.orange}`, borderRadius: 8, padding: "7px 12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{speaking ? "⏸ Stop" : "🔊 Read"}</button>
+              <button onClick={() => setShowAudioOpts(v => !v)} style={{ background: showAudioOpts ? B.orange : "rgba(0,0,0,.55)", color: "#fff", border: "1px solid rgba(255,255,255,.25)", borderRadius: 8, padding: "7px 11px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>⚙</button>
+            </>
           )}
-          <button onClick={toggleFs} style={{ background: "rgba(0,0,0,.55)", color: "#fff", border: "1px solid rgba(255,255,255,.25)", borderRadius: 8, padding: "7px 12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>✕ Exit Full Screen</button>
+          <button onClick={toggleFs} style={{ background: "rgba(0,0,0,.55)", color: "#fff", border: "1px solid rgba(255,255,255,.25)", borderRadius: 8, padding: "7px 12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>✕ Exit</button>
+          {pdf && ttsSupported && showAudioOpts && renderAudioPanel({ top: 48, right: 0 })}
         </div>
       )}
       <div ref={wrapRef} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden", padding: isFs ? 4 : 12, minHeight: 0 }}>
