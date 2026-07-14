@@ -944,7 +944,7 @@ const LandingPage = ({ onGetStarted }) => {
 
       {/* Footer */}
       <div style={{ borderTop: "1px solid rgba(255,255,255,.08)", padding: "24px clamp(16px,4vw,48px)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
-        <div style={{ color: "rgba(255,255,255,.4)", fontSize: 13 }}>© 2025 DhishaAI Complete Analytics, Bengaluru</div>
+        <div style={{ color: "rgba(255,255,255,.4)", fontSize: 13 }}>© 2026 DhishaAI Complete Analytics, Bengaluru</div>
         <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
           <a href="mailto:admin@dhishaai.com" style={{ color: "rgba(255,255,255,.4)", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }}><Ico n="mail" s={14} />admin@dhishaai.com</a>
           <a href="tel:+919886090090" style={{ color: "rgba(255,255,255,.4)", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }}><Ico n="phone" s={14} />+91 98860 90090</a>
