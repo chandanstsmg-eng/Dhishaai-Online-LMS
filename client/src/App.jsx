@@ -605,6 +605,22 @@ const SlideViewer = ({ materialId, title, onClose, onReachedEnd }) => {
   const [speaking, setSpeaking] = useState(false); // read-aloud (text-to-speech) active
   const speakingRef = useRef(false);
   const ttsSupported = typeof window !== "undefined" && "speechSynthesis" in window;
+  const [voices, setVoices] = useState([]);
+  const [rate, setRate] = useState(() => Number(localStorage.getItem("lms_tts_rate")) || 1.25);
+  const [gender, setGender] = useState(() => localStorage.getItem("lms_tts_gender") || "female");
+  const rateRef = useRef(rate);
+  const genderRef = useRef(gender);
+  useEffect(() => { rateRef.current = rate; localStorage.setItem("lms_tts_rate", String(rate)); }, [rate]);
+  useEffect(() => { genderRef.current = gender; localStorage.setItem("lms_tts_gender", gender); }, [gender]);
+
+  // Load the device's available voices (they populate asynchronously).
+  useEffect(() => {
+    if (!ttsSupported) return;
+    const load = () => setVoices(window.speechSynthesis.getVoices() || []);
+    load();
+    window.speechSynthesis.onvoiceschanged = load;
+    return () => { try { window.speechSynthesis.onvoiceschanged = null; } catch {} };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const onResize = () => setFit(f => f + 1);
@@ -723,6 +739,18 @@ const SlideViewer = ({ materialId, title, onClose, onReachedEnd }) => {
       return tc.items.map(it => it.str).join(" ").replace(/\s+/g, " ").trim();
     } catch { return ""; }
   };
+  // Choose a voice matching the chosen gender. Voice metadata has no gender flag,
+  // so we match on well-known voice names (Windows/Chrome/Android/iOS), preferring
+  // English voices; falls back to any available voice.
+  const pickVoice = () => {
+    const list = voices.length ? voices : (ttsSupported ? window.speechSynthesis.getVoices() : []);
+    const en = list.filter(v => /^en/i.test(v.lang));
+    const pool = en.length ? en : list;
+    const femaleRe = /\bfemale\b|zira|hazel|susan|samantha|victoria|karen|moira|tessa|fiona|serena|heera|linda|eva|aria|jenny|michelle|catherine|sonia|neerja|swara|salli|joanna|kendra/i;
+    const maleRe = /\bmale\b|david|mark|george|james|guy|ravi|tony|brian|christopher|eric|roger|daniel|thomas|oliver|prabhat|matthew|justin/i;
+    const want = genderRef.current === "male" ? maleRe : femaleRe;
+    return pool.find(v => want.test(v.name)) || pool[0] || null;
+  };
   const readAloud = async () => {
     if (!pdf || !ttsSupported) return;
     const synth = window.speechSynthesis;
@@ -749,7 +777,9 @@ const SlideViewer = ({ materialId, title, onClose, onReachedEnd }) => {
           return stopSpeak();
         }
         const u = new SpeechSynthesisUtterance(chunks[idx]);
-        u.lang = "en-IN"; u.rate = 1; u.pitch = 1;
+        const v = pickVoice();
+        if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = "en-IN"; }
+        u.rate = rateRef.current; u.pitch = 1;
         u.onend = () => { idx += 1; next(); };
         u.onerror = () => { idx += 1; next(); };
         synth.speak(u);
@@ -759,6 +789,9 @@ const SlideViewer = ({ materialId, title, onClose, onReachedEnd }) => {
     speakPage(page);
   };
   const toggleSpeak = () => { if (speaking) stopSpeak(); else readAloud(); };
+  // Change speed / voice — applies immediately (restarts the current page if playing).
+  const changeRate = r => { rateRef.current = r; setRate(r); if (speakingRef.current) readAloud(); };
+  const changeGender = g => { genderRef.current = g; setGender(g); if (speakingRef.current) readAloud(); };
 
   // Stop narration when the material changes or the viewer unmounts.
   useEffect(() => () => stopSpeak(), []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -778,6 +811,24 @@ const SlideViewer = ({ materialId, title, onClose, onReachedEnd }) => {
             <button onClick={toggleFs} className="btn btn-secondary btn-sm">⛶ Full Screen</button>
             <button onClick={onClose} className="btn btn-secondary btn-sm">✕ Close</button>
           </div>
+        </div>
+      )}
+      {!isFs && pdf && ttsSupported && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, flexWrap: "wrap", padding: "0 14px 10px", color: "#fff" }}>
+          <span style={{ fontSize: 12, color: "rgba(255,255,255,.55)", fontWeight: 600 }}>🔊 Voice</span>
+          <div style={{ display: "inline-flex", border: "1px solid rgba(255,255,255,.25)", borderRadius: 8, overflow: "hidden" }}>
+            <button onClick={() => changeGender("female")} style={{ padding: "6px 12px", fontSize: 12.5, fontWeight: 700, background: gender === "female" ? B.orange : "transparent", color: "#fff", border: "none", cursor: "pointer" }}>♀ Female</button>
+            <button onClick={() => changeGender("male")} style={{ padding: "6px 12px", fontSize: 12.5, fontWeight: 700, background: gender === "male" ? B.orange : "transparent", color: "#fff", border: "none", cursor: "pointer" }}>♂ Male</button>
+          </div>
+          <span style={{ fontSize: 12, color: "rgba(255,255,255,.55)", fontWeight: 600, marginLeft: 6 }}>Speed</span>
+          <select value={rate} onChange={e => changeRate(Number(e.target.value))} style={{ padding: "6px 10px", fontSize: 12.5, fontWeight: 700, borderRadius: 8, background: "rgba(255,255,255,.12)", color: "#fff", border: "1px solid rgba(255,255,255,.25)", cursor: "pointer" }}>
+            <option value={0.75} style={{ color: "#000" }}>0.75× Slow</option>
+            <option value={1} style={{ color: "#000" }}>1× Normal</option>
+            <option value={1.25} style={{ color: "#000" }}>1.25×</option>
+            <option value={1.5} style={{ color: "#000" }}>1.5×</option>
+            <option value={1.75} style={{ color: "#000" }}>1.75×</option>
+            <option value={2} style={{ color: "#000" }}>2× Fast</option>
+          </select>
         </div>
       )}
       {isFs && (
