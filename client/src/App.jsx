@@ -892,7 +892,7 @@ const LandingPage = ({ onGetStarted }) => {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(300px,1fr))", gap: 20 }}>
           {testimonials.map(t => (
             <div key={t.name} className="testimonial-card">
-              <div style={{ fontSize: 24, color: B.orange, marginBottom: 14, lineHeight: 1 }}>"</div>
+              <div style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 52, color: B.orange, height: 26, marginBottom: 8, lineHeight: 1, userSelect: "none" }}>&ldquo;</div>
               <p style={{ color: "rgba(255,255,255,.8)", fontSize: 14, lineHeight: 1.7, marginBottom: 18 }}>{t.text}</p>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <div style={{ width: 40, height: 40, borderRadius: 10, background: `${B.orange}30`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, color: B.orange, fontSize: 16 }}>{t.avatar}</div>
