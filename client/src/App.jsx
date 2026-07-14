@@ -602,6 +602,9 @@ const SlideViewer = ({ materialId, title, onClose, onReachedEnd }) => {
   const [err, setErr] = useState("");
   const [isFs, setIsFs] = useState(false);
   const [fit, setFit] = useState(0); // bump to re-fit on resize / orientation / fullscreen
+  const [speaking, setSpeaking] = useState(false); // read-aloud (text-to-speech) active
+  const speakingRef = useRef(false);
+  const ttsSupported = typeof window !== "undefined" && "speechSynthesis" in window;
 
   useEffect(() => {
     const onResize = () => setFit(f => f + 1);
@@ -704,19 +707,86 @@ const SlideViewer = ({ materialId, title, onClose, onReachedEnd }) => {
     }
   }, [page, numPages, imgSrc]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── READ ALOUD (audio) ──────────────────────────────────────────────────────
+  // Pulls the real text out of the PDF (pdf.js) and speaks it with the browser's
+  // built-in speech engine — instant, offline, free, works on every PDF that has
+  // selectable text. Reads the current page, then auto-advances through the rest.
+  const stopSpeak = () => {
+    speakingRef.current = false;
+    setSpeaking(false);
+    try { window.speechSynthesis.cancel(); } catch {}
+  };
+  const getPageText = async n => {
+    try {
+      const pg = await pdf.getPage(n);
+      const tc = await pg.getTextContent();
+      return tc.items.map(it => it.str).join(" ").replace(/\s+/g, " ").trim();
+    } catch { return ""; }
+  };
+  const readAloud = async () => {
+    if (!pdf || !ttsSupported) return;
+    const synth = window.speechSynthesis;
+    synth.cancel();
+    speakingRef.current = true;
+    setSpeaking(true);
+    const speakPage = async n => {
+      if (!speakingRef.current) return;
+      setPage(n); // show the page being read
+      const text = await getPageText(n);
+      if (!speakingRef.current) return;
+      // Split into sentence-sized chunks — dodges the browser cutoff on long
+      // utterances and keeps narration flowing smoothly.
+      const chunks = (text.match(/[^.!?]+[.!?]*/g) || (text ? [text] : [])).map(s => s.trim()).filter(Boolean);
+      if (chunks.length === 0) { // page has no selectable text (e.g. scanned image)
+        if (n < numPages) return speakPage(n + 1);
+        return stopSpeak();
+      }
+      let idx = 0;
+      const next = () => {
+        if (!speakingRef.current) return;
+        if (idx >= chunks.length) {
+          if (n < numPages) return speakPage(n + 1);
+          return stopSpeak();
+        }
+        const u = new SpeechSynthesisUtterance(chunks[idx]);
+        u.lang = "en-IN"; u.rate = 1; u.pitch = 1;
+        u.onend = () => { idx += 1; next(); };
+        u.onerror = () => { idx += 1; next(); };
+        synth.speak(u);
+      };
+      next();
+    };
+    speakPage(page);
+  };
+  const toggleSpeak = () => { if (speaking) stopSpeak(); else readAloud(); };
+
+  // Stop narration when the material changes or the viewer unmounts.
+  useEffect(() => () => stopSpeak(), []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { stopSpeak(); }, [materialId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return createPortal(
     <div ref={containerRef} onContextMenu={e => e.preventDefault()} style={{ position: "fixed", inset: 0, height: "100dvh", zIndex: 100000, background: "rgba(8,12,20,.97)", display: "flex", flexDirection: "column", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" }}>
       {!isFs && (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 18px", color: "#fff", gap: 12 }}>
           <div style={{ fontWeight: 700, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title || "Material"}{numPages ? ` · Page ${page}/${numPages}` : ""}</div>
           <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+            {pdf && ttsSupported && (
+              <button onClick={toggleSpeak} className="btn btn-sm" style={{ background: speaking ? B.orange : "rgba(232,119,34,.18)", color: "#fff", border: `1px solid ${B.orange}`, fontWeight: 700 }}>
+                {speaking ? "⏸ Stop Audio" : "🔊 Read Aloud"}
+              </button>
+            )}
             <button onClick={toggleFs} className="btn btn-secondary btn-sm">⛶ Full Screen</button>
             <button onClick={onClose} className="btn btn-secondary btn-sm">✕ Close</button>
           </div>
         </div>
       )}
       {isFs && (
-        <button onClick={toggleFs} style={{ position: "absolute", top: "max(10px, env(safe-area-inset-top))", right: 10, zIndex: 5, background: "rgba(0,0,0,.55)", color: "#fff", border: "1px solid rgba(255,255,255,.25)", borderRadius: 8, padding: "7px 12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>✕ Exit Full Screen</button>
+        <div style={{ position: "absolute", top: "max(10px, env(safe-area-inset-top))", right: 10, zIndex: 5, display: "flex", gap: 8 }}>
+          {pdf && ttsSupported && (
+            <button onClick={toggleSpeak} style={{ background: speaking ? B.orange : "rgba(0,0,0,.55)", color: "#fff", border: `1px solid ${B.orange}`, borderRadius: 8, padding: "7px 12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{speaking ? "⏸ Stop" : "🔊 Read"}</button>
+          )}
+          <button onClick={toggleFs} style={{ background: "rgba(0,0,0,.55)", color: "#fff", border: "1px solid rgba(255,255,255,.25)", borderRadius: 8, padding: "7px 12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>✕ Exit Full Screen</button>
+        </div>
       )}
       <div ref={wrapRef} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden", padding: isFs ? 4 : 12, minHeight: 0 }}>
         {loading ? <Spinner size={42} color="#fff" />
