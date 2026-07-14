@@ -819,7 +819,7 @@ const LandingPage = ({ onGetStarted }) => {
       {/* Hero Section */}
       <div style={{ textAlign: "center", padding: "clamp(48px,8vw,90px) clamp(16px,4vw,48px) clamp(32px,5vw,64px)", maxWidth: 860, margin: "0 auto" }}>
         <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "rgba(232,119,34,.15)", border: "1px solid rgba(232,119,34,.3)", borderRadius: 20, padding: "6px 16px", fontSize: 13, color: B.orange, fontWeight: 600, marginBottom: 28 }}>
-          <Ico n="zap" s={14} c={B.orange} /> Learn-->Practice-->Get Hired
+          <Ico n="zap" s={14} c={B.orange} /> Skills That Get You Hired
         </div>
         <h1 style={{ fontSize: "clamp(38px,5.5vw,72px)", fontWeight: 900, color: "#fff", lineHeight: 1.08, marginBottom: 22, letterSpacing: "-1px" }}>
           Master In-Demand Skills.<br />
