@@ -2530,7 +2530,10 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
     // end. A module with no material has nothing to read, so this is vacuously true.
     const moduleMaterialsRead = m => materialsForModule(m).every(mat => materialRead(mat.id));
     const moduleTopicsDone = m => m.topics.every(t => topicDone(t.globalIndex));
-    const moduleComplete = m => moduleTopicsDone(m) && (!m.quiz || quizPassed(m.quiz));
+    // "Studied" = topics done AND every sub-module PDF read. A 0-topic module
+    // must NOT count as done just because it has no topics — its PDFs must be read.
+    const moduleStudied = m => moduleTopicsDone(m) && moduleMaterialsRead(m);
+    const moduleComplete = m => moduleStudied(m) && (!m.quiz || quizPassed(m.quiz));
     // When the admin manually controls release, only the released modules are open;
     // otherwise fall back to auto-unlock (finish the previous module to open the next).
     const releasedSet = selected.manualRelease ? (Array.isArray(selected.releasedModules) ? selected.releasedModules : []) : null;
@@ -2766,6 +2769,7 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
               const unlocked = moduleUnlocked(m);
               const complete = moduleComplete(m);
               const topicsDone = moduleTopicsDone(m);
+              const studied = moduleStudied(m); // topics done AND all sub-module PDFs read
               const modMats = materialsForModule(m);
               return (
                 <div key={m.index} className="card-flat" style={{ padding: 0, overflow: "hidden", opacity: unlocked ? 1 : .6 }}>
@@ -2796,13 +2800,13 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
                             </div>
                           ))}
                         </div>
-                        {topicsDone
+                        {studied
                           ? <div style={{ marginTop: 12, fontSize: 13, color: B.success, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}><Ico n="check" s={14} c={B.success} />Module completed</div>
                           : modMats.length === 0
                             ? <button className="btn btn-primary btn-sm" style={{ marginTop: 12 }} onClick={() => markModule(m)}><Ico n="check" s={13} />Mark Module as Complete</button>
                             : <div style={{ marginTop: 12, fontSize: 13, color: "var(--text2)", fontWeight: 600, display: "flex", alignItems: "center", gap: 8, background: `${B.orange}12`, border: `1px solid ${B.orange}44`, borderRadius: 10, padding: "10px 14px" }}>
                                 <Ico n="lock" s={14} c={B.orange} />
-                                Read the {modMats.length > 1 ? "materials" : "material"} below to the last page — the module then completes automatically and the quiz unlocks.
+                                Read {modMats.length > 1 ? "all the sub-modules" : "the sub-module"} below to the last page — the module then completes automatically and the quiz unlocks.
                               </div>}
                       </div>
 
@@ -2833,19 +2837,19 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
 
                       {/* Module quiz gate — right below the View option */}
                       {m.quiz && (
-                        <div style={{ marginTop: 4, padding: "14px 16px", borderRadius: 12, border: `1.5px dashed ${quizPassed(m.quiz) ? B.success : topicsDone ? B.orange : "var(--border)"}`, background: "var(--surface2)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                        <div style={{ marginTop: 4, padding: "14px 16px", borderRadius: 12, border: `1.5px dashed ${quizPassed(m.quiz) ? B.success : studied ? B.orange : "var(--border)"}`, background: "var(--surface2)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                           <div style={{ width: 34, height: 34, borderRadius: 9, background: `${B.orange}18`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                             <Ico n="quiz" s={18} c={B.orange} />
                           </div>
                           <div style={{ flex: 1, minWidth: 140 }}>
                             <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)" }}>{m.quiz.title}</div>
                             <div style={{ fontSize: 12, color: "var(--text2)" }}>
-                              {quizPassed(m.quiz) ? "Passed ✓ — module complete" : topicsDone ? "Score 70%+ to unlock the next module" : modMats.length ? "Finish the material above to unlock the quiz" : "Mark the module complete above to take the quiz"}
+                              {quizPassed(m.quiz) ? "Passed ✓ — module complete" : studied ? "Score 70%+ to unlock the next module" : modMats.length ? "Finish the sub-modules above to unlock the quiz" : "Mark the module complete above to take the quiz"}
                             </div>
                           </div>
                           {quizPassed(m.quiz)
                             ? <span className="badge badge-green">Passed ✓</span>
-                            : <button className="btn btn-primary btn-sm" disabled={!topicsDone} onClick={() => { setAnswers({}); setSubmitted(false); setScore(null); setActiveQuiz(m.quiz); }}>
+                            : <button className="btn btn-primary btn-sm" disabled={!studied} onClick={() => { setAnswers({}); setSubmitted(false); setScore(null); setActiveQuiz(m.quiz); }}>
                                 <Ico n="play" s={13} />{results.some(r => r.quizId === m.quiz.id) ? "Retake Quiz" : "Take Quiz"} →
                               </button>}
                         </div>
