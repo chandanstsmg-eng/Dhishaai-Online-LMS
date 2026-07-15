@@ -4610,9 +4610,15 @@ const StudyPlannerPage = () => {
   // Group study sessions (coursemates organise + join).
   const [groupSessions, setGroupSessions] = useState([]);
   const [showGroup, setShowGroup] = useState(false);
-  const blankGroup = { courseId: "", topic: "", date: today, time: "", duration: 60, note: "" };
+  const blankGroup = { courseId: "", topic: "", reason: "", date: today, time: "", duration: 60, note: "" };
   const [gForm, setGForm] = useState(blankGroup);
   const loadGroups = () => GET("/group-sessions").then(setGroupSessions).catch(() => {});
+  const addRecording = async (g) => {
+    const link = prompt("Paste the recording link (Google Drive / Meet recording URL):", g.recordingLink || "");
+    if (link === null) return;
+    try { await POST(`/group-sessions/${g.id}/recording`, { recordingLink: link.trim() }); loadGroups(); }
+    catch (e) { show(e.message, "error"); }
+  };
 
   useEffect(() => {
     GET("/study-plan").then(setPlan).catch(() => {});
@@ -4621,10 +4627,11 @@ const StudyPlannerPage = () => {
   }, []);
 
   const addGroup = async () => {
-    if (!gForm.topic.trim()) { show("Say what you'll study", "error"); return; }
+    if (!gForm.topic.trim()) { show("Say what you'll teach", "error"); return; }
+    if (!gForm.courseId) { show("Pick the course this session is for", "error"); return; }
     try {
       await POST("/group-sessions", gForm);
-      show("Posted — your coursemates can now join! 👥");
+      show("Request sent to your admin for approval 🎥");
       setGForm(blankGroup); setShowGroup(false); loadGroups();
     } catch (e) { show(e.message, "error"); }
   };
@@ -4773,19 +4780,26 @@ const StudyPlannerPage = () => {
         </div>
       )}
 
-      {/* ── GROUP STUDY (coursemates organise + join) ── */}
+      {/* ── ONLINE / GROUP STUDY (student requests → admin approves → join) ── */}
       <div className="card-flat" style={{ padding: "clamp(16px,3vw,22px)", marginTop: 8, border: `1.5px solid ${B.orange}33` }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
           <div>
-            <div style={{ fontWeight: 800, fontSize: 16, color: "var(--text)", display: "flex", alignItems: "center", gap: 8 }}>👥 Group Study</div>
-            <div style={{ fontSize: 12.5, color: "var(--text2)", marginTop: 2 }}>Post what you're studying and when — coursemates can join and learn together.</div>
+            <div style={{ fontWeight: 800, fontSize: 16, color: "var(--text)", display: "flex", alignItems: "center", gap: 8 }}>🎥 Online Study Sessions</div>
+            <div style={{ fontSize: 12.5, color: "var(--text2)", marginTop: 2 }}>Want to teach a topic online? Request to host — your admin approves and adds the Google Meet link, then coursemates can join.</div>
           </div>
-          <button className="btn btn-primary btn-sm" onClick={() => setShowGroup(v => !v)}><Ico n="plus" s={14} />Post a session</button>
+          <button className="btn btn-primary btn-sm" onClick={() => setShowGroup(v => !v)}><Ico n="plus" s={14} />Request to host</button>
         </div>
 
         {showGroup && (
           <div style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 12, padding: 16, margin: "14px 0" }}>
-            <div className="form-group"><label className="form-label">What will you study?</label><input className="input-field" placeholder="e.g. Module 2 — SQL JOINs practice together" value={gForm.topic} onChange={e => setGForm(f => ({ ...f, topic: e.target.value }))} /></div>
+            <div className="form-group"><label className="form-label">Topic you'll teach</label><input className="input-field" placeholder="e.g. Module 2 — SQL JOINs explained" value={gForm.topic} onChange={e => setGForm(f => ({ ...f, topic: e.target.value }))} /></div>
+            <div className="form-group"><label className="form-label">Course <span style={{ color: "var(--text2)", fontWeight: 500 }}>(its admin approves your request)</span></label>
+              <select className="input-field" value={gForm.courseId} onChange={e => setGForm(f => ({ ...f, courseId: e.target.value }))}>
+                <option value="">— Select course —</option>
+                {courses.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+              </select>
+            </div>
+            <div className="form-group"><label className="form-label">Why is this useful for your coursemates? <span style={{ color: "var(--text2)", fontWeight: 500 }}>(for the admin)</span></label><input className="input-field" placeholder="e.g. Many struggle with JOINs — I'll walk through examples" value={gForm.reason} onChange={e => setGForm(f => ({ ...f, reason: e.target.value }))} /></div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
               <div className="form-group"><label className="form-label">Date</label><input type="date" className="input-field" value={gForm.date} min={today} onChange={e => setGForm(f => ({ ...f, date: e.target.value }))} /></div>
               <div className="form-group"><label className="form-label">Time</label><input type="time" className="input-field" value={gForm.time} onChange={e => setGForm(f => ({ ...f, time: e.target.value }))} /></div>
@@ -4795,15 +4809,8 @@ const StudyPlannerPage = () => {
                 </select>
               </div>
             </div>
-            <div className="form-group"><label className="form-label">Course <span style={{ color: "var(--text2)", fontWeight: 500 }}>(so the right coursemates see it)</span></label>
-              <select className="input-field" value={gForm.courseId} onChange={e => setGForm(f => ({ ...f, courseId: e.target.value }))}>
-                <option value="">— Any of my coursemates —</option>
-                {courses.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
-              </select>
-            </div>
-            <div className="form-group"><label className="form-label">Note (optional)</label><input className="input-field" placeholder="Where / how — e.g. on Google Meet, library, etc." value={gForm.note} onChange={e => setGForm(f => ({ ...f, note: e.target.value }))} /></div>
             <div style={{ display: "flex", gap: 8 }}>
-              <button className="btn btn-primary btn-sm" onClick={addGroup}><Ico n="plus" s={14} />Post session</button>
+              <button className="btn btn-primary btn-sm" onClick={addGroup}><Ico n="send" s={14} />Send request</button>
               <button className="btn btn-secondary btn-sm" onClick={() => { setShowGroup(false); setGForm(blankGroup); }}>Cancel</button>
             </div>
           </div>
@@ -4811,30 +4818,48 @@ const StudyPlannerPage = () => {
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 14 }}>
           {groupSessions.length === 0 ? (
-            <div style={{ padding: 20, textAlign: "center", color: "var(--text2)", fontSize: 13.5, background: "var(--surface2)", borderRadius: 10 }}>No group sessions yet. Be the first — <button style={{ color: B.orange, background: "none", border: "none", cursor: "pointer", fontWeight: 700 }} onClick={() => setShowGroup(true)}>post one →</button></div>
+            <div style={{ padding: 20, textAlign: "center", color: "var(--text2)", fontSize: 13.5, background: "var(--surface2)", borderRadius: 10 }}>No online sessions yet. Want to teach a topic? <button style={{ color: B.orange, background: "none", border: "none", cursor: "pointer", fontWeight: 700 }} onClick={() => setShowGroup(true)}>request to host →</button></div>
           ) : groupSessions.map(g => {
             const isPast = g.date < today;
+            const stColor = g.status === "approved" ? B.success : g.status === "rejected" ? B.danger : B.orange;
+            const stLabel = g.status === "approved" ? "Approved ✓" : g.status === "rejected" ? "Not approved" : "Pending admin approval";
             return (
-              <div key={g.id} style={{ border: `1.5px solid ${g.joined ? B.success : "var(--border)"}`, background: g.joined ? `${B.success}08` : "var(--surface)", borderRadius: 12, padding: "14px 16px", opacity: isPast ? 0.6 : 1 }}>
+              <div key={g.id} style={{ border: `1.5px solid ${g.joined && g.status === "approved" ? B.success : "var(--border)"}`, background: g.joined && g.status === "approved" ? `${B.success}08` : "var(--surface)", borderRadius: 12, padding: "14px 16px", opacity: isPast ? 0.6 : 1 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
                   <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontWeight: 700, fontSize: 14.5, color: "var(--text)" }}>{g.topic}</div>
+                    <div style={{ fontWeight: 700, fontSize: 14.5, color: "var(--text)", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      {g.topic}
+                      <span className="badge" style={{ background: `${stColor}20`, color: stColor }}>{stLabel}</span>
+                    </div>
                     <div style={{ fontSize: 12.5, color: "var(--text2)", marginTop: 3, display: "flex", gap: 12, flexWrap: "wrap" }}>
                       <span>👤 {g.hostName}{g.isHost ? " (you)" : ""}</span>
                       <span>📅 {g.date}{g.time ? ` · ${g.time}` : ""}</span>
                       <span>⏱ {g.duration} min</span>
                       {g.courseTitle && <span>📘 {g.courseTitle}</span>}
                     </div>
-                    {g.note && <div style={{ fontSize: 12.5, color: "var(--text2)", marginTop: 5 }}>📝 {g.note}</div>}
-                    <div style={{ fontSize: 12, color: g.joinerCount > 1 ? B.success : "var(--text2)", marginTop: 6, fontWeight: 600 }}>
-                      {g.joinerCount} joined{g.joiners?.length ? `: ${g.joiners.map(j => j.studentName).join(", ")}` : ""}
-                    </div>
+                    {g.reason && <div style={{ fontSize: 12.5, color: "var(--text2)", marginTop: 5 }}>💡 {g.reason}</div>}
+                    {g.status === "approved" && (
+                      <div style={{ fontSize: 12, color: g.joinerCount > 1 ? B.success : "var(--text2)", marginTop: 6, fontWeight: 600 }}>
+                        {g.joinerCount} joined{g.joiners?.length ? `: ${g.joiners.map(j => j.studentName).join(", ")}` : ""}
+                      </div>
+                    )}
+                    {/* Meet link — visible to host or after joining */}
+                    {g.status === "approved" && g.videoLink && (
+                      <a href={g.videoLink} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm" style={{ marginTop: 10, textDecoration: "none" }}>🎥 Open Google Meet</a>
+                    )}
+                    {g.status === "approved" && !g.videoLink && !g.isHost && !g.joined && (
+                      <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 8 }}>Join to get the Meet link.</div>
+                    )}
+                    {/* Recording */}
+                    {g.recordingLink
+                      ? <div style={{ marginTop: 8 }}><a href={g.recordingLink} target="_blank" rel="noreferrer" style={{ color: B.orange, fontSize: 12.5, fontWeight: 600 }}>▶ Watch recording</a></div>
+                      : (g.isHost && g.status === "approved" && isPast) ? <button className="btn btn-secondary btn-xs" style={{ marginTop: 8 }} onClick={() => addRecording(g)}>+ Add recording link</button> : null}
                   </div>
-                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                    {!isPast && (g.isHost
-                      ? <span className="badge badge-orange" style={{ alignSelf: "center" }}>Your session</span>
-                      : <button className={`btn btn-sm ${g.joined ? "btn-secondary" : "btn-primary"}`} onClick={() => toggleJoin(g)}>{g.joined ? "Leave" : "Join"}</button>)}
-                    {(g.isHost) && <button className="btn btn-danger btn-xs" onClick={() => delGroup(g)}><Ico n="trash" s={12} /></button>}
+                  <div style={{ display: "flex", gap: 6, flexShrink: 0, flexDirection: "column", alignItems: "flex-end" }}>
+                    {!isPast && g.status === "approved" && !g.isHost && (
+                      <button className={`btn btn-sm ${g.joined ? "btn-secondary" : "btn-primary"}`} onClick={() => toggleJoin(g)}>{g.joined ? "Leave" : "Join"}</button>
+                    )}
+                    {g.isHost && <button className="btn btn-danger btn-xs" onClick={() => delGroup(g)}><Ico n="trash" s={12} /></button>}
                   </div>
                 </div>
               </div>
@@ -5431,6 +5456,83 @@ const StudentProjectsPage = () => {
   );
 };
 
+// ─── ADMIN ONLINE SESSIONS (approve student-hosted sessions + add Meet link) ────
+const AdminSessionsPage = () => {
+  const [sessions, setSessions] = useState([]);
+  const [linkInput, setLinkInput] = useState({}); // sessionId -> meet link being typed
+  const [show, toastEl] = useToast();
+  const load = () => GET("/group-sessions/manage").then(setSessions).catch(() => {});
+  useEffect(() => { load(); }, []);
+
+  const approve = async (g) => {
+    const link = (linkInput[g.id] ?? g.videoLink ?? "").trim();
+    if (!link) { show("Paste the Google Meet link first", "error"); return; }
+    try { await POST(`/group-sessions/${g.id}/approve`, { videoLink: link }); show("Approved — Meet link sent to the host and coursemates ✅"); load(); }
+    catch (e) { show(e.message, "error"); }
+  };
+  const reject = async (g) => { if (!confirm(`Reject "${g.topic}"?`)) return; try { await POST(`/group-sessions/${g.id}/reject`, {}); show("Request rejected"); load(); } catch (e) { show(e.message, "error"); } };
+  const del = async (g) => { if (!confirm(`Delete "${g.topic}"?`)) return; try { await DELETE(`/group-sessions/${g.id}`); load(); } catch (e) { show(e.message, "error"); } };
+
+  const pending = sessions.filter(s => s.status === "pending");
+  const others = sessions.filter(s => s.status !== "pending");
+
+  const Row = ({ g }) => {
+    const stColor = g.status === "approved" ? B.success : g.status === "rejected" ? B.danger : B.orange;
+    return (
+      <div className="card" style={{ padding: 18 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: 15, color: "var(--text)", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              {g.topic}
+              <span className="badge" style={{ background: `${stColor}20`, color: stColor }}>{g.status}</span>
+            </div>
+            <div style={{ fontSize: 12.5, color: "var(--text2)", marginTop: 4, display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <span>👤 {g.hostName}</span><span>📅 {g.date}{g.time ? ` · ${g.time}` : ""}</span><span>⏱ {g.duration} min</span>{g.courseTitle && <span>📘 {g.courseTitle}</span>}
+            </div>
+            {g.reason && <div style={{ fontSize: 12.5, color: "var(--text2)", marginTop: 6 }}>💡 {g.reason}</div>}
+            {g.status === "approved" && g.videoLink && <div style={{ fontSize: 12.5, marginTop: 6 }}>🎥 <a href={g.videoLink} target="_blank" rel="noreferrer" style={{ color: B.orange }}>{g.videoLink}</a> · {g.joinerCount} joined</div>}
+            {g.recordingLink && <div style={{ fontSize: 12.5, marginTop: 4 }}>▶ <a href={g.recordingLink} target="_blank" rel="noreferrer" style={{ color: B.orange }}>Recording</a></div>}
+          </div>
+          <button className="btn btn-danger btn-xs" onClick={() => del(g)}><Ico n="trash" s={12} /></button>
+        </div>
+        {g.status === "pending" && (
+          <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <input className="input-field" placeholder="Paste Google Meet link (https://meet.google.com/...)" style={{ flex: 1, minWidth: 220 }}
+              value={linkInput[g.id] ?? ""} onChange={e => setLinkInput(m => ({ ...m, [g.id]: e.target.value }))} />
+            <button className="btn btn-primary btn-sm" onClick={() => approve(g)}><Ico n="check" s={14} />Approve & send link</button>
+            <button className="btn btn-danger btn-sm" onClick={() => reject(g)}><Ico n="x" s={14} />Reject</button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="fadeIn">
+      {toastEl}
+      <div className="section-header">
+        <div><h1 className="section-title">Online Sessions</h1><p style={{ color: "var(--text2)", fontSize: 13 }}>Students request to host online sessions. Approve and add the Google Meet link — it's then sent to the host and coursemates.</p></div>
+      </div>
+      {sessions.length === 0 ? <EmptyState icon="forum" title="No session requests yet" desc="When a student requests to host an online session, it appears here for your approval." /> : (
+        <>
+          {pending.length > 0 && (
+            <div style={{ marginBottom: 22 }}>
+              <div style={{ fontWeight: 700, fontSize: 15, color: "var(--text)", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>⏳ Pending requests <span className="badge badge-orange">{pending.length}</span></div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>{pending.map(g => <Row key={g.id} g={g} />)}</div>
+            </div>
+          )}
+          {others.length > 0 && (
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 15, color: "var(--text)", marginBottom: 12 }}>Approved & past</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>{others.map(g => <Row key={g.id} g={g} />)}</div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
+
 // ─── MAIN APP ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState("landing");
@@ -5498,6 +5600,7 @@ export default function App() {
     { id: "students", label: "All Students", icon: "user" },
     { id: "courses", label: "All Courses", icon: "book" },
     { id: "projects", label: "Projects", icon: "assign" },
+    { id: "sessions", label: "Online Sessions", icon: "play" },
     { id: "quiz", label: "Quizzes", icon: "quiz" },
     { id: "assign", label: "Materials", icon: "book" },
     { id: "forum", label: "Forum", icon: "forum" },
@@ -5509,6 +5612,7 @@ export default function App() {
     { id: "students", label: "My Students", icon: "users" },
     { id: "courses", label: "My Courses", icon: "book" },
     { id: "projects", label: "Projects", icon: "assign" },
+    { id: "sessions", label: "Online Sessions", icon: "play" },
     { id: "quiz", label: "Quizzes", icon: "quiz" },
     { id: "assign", label: "Materials", icon: "book" },
     { id: "forum", label: "Forum", icon: "forum" },
@@ -5567,6 +5671,7 @@ export default function App() {
       if (page === "students") return <AdminStudentsPage batches={batches} courses={courses} />;
       if (page === "courses") return <AdminCoursesPage user={user} onCourseChange={() => GET("/courses").then(setCourses)} />;
       if (page === "projects") return <AdminProjectsPage batches={batches} courses={courses} />;
+      if (page === "sessions") return <AdminSessionsPage />;
       if (page === "quiz") return <AdminQuizPage />;
       if (page === "assign") return <AssignmentsPage user={user} />;
       if (page === "forum") return <ForumPage user={user} />;
@@ -5578,6 +5683,7 @@ export default function App() {
       if (page === "students") return <AdminStudentsPage batches={batches} courses={courses} />;
       if (page === "courses") return <AdminCoursesPage user={user} onCourseChange={() => GET("/courses").then(setCourses)} />;
       if (page === "projects") return <AdminProjectsPage batches={batches} courses={courses} />;
+      if (page === "sessions") return <AdminSessionsPage />;
       if (page === "quiz") return <AdminQuizPage />;
       if (page === "assign") return <AssignmentsPage user={user} />;
       if (page === "forum") return <ForumPage user={user} />;
