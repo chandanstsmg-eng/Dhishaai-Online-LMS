@@ -1828,6 +1828,25 @@ if (fs.existsSync(distIndex)) {
 }
 
 loadDB();
+// Best-effort: open the Windows Firewall for our port so other devices on the
+// LAN/Wi-Fi can connect. Silently no-ops if not on Windows or not elevated
+// (in that case, run Allow-Firewall-Once.bat as administrator instead).
+function ensureFirewallOpen() {
+  if (process.platform !== 'win32') return;
+  try {
+    const { exec } = require('child_process');
+    const ruleName = 'DhishaAI LMS ' + PORT;
+    exec(`netsh advfirewall firewall show rule name="${ruleName}"`, (_e, stdout) => {
+      if (stdout && stdout.includes(ruleName)) return; // rule already exists
+      exec(`netsh advfirewall firewall add rule name="${ruleName}" dir=in action=allow protocol=TCP localport=${PORT} profile=any`,
+        (e2) => {
+          if (e2) console.log(`⚠  Could not auto-open the firewall — run Allow-Firewall-Once.bat as administrator so other devices can connect.`);
+          else console.log(`🛡  Firewall: opened TCP ${PORT} for LAN/Wi-Fi access.`);
+        });
+    });
+  } catch { /* ignore */ }
+}
+
 // Find this machine's LAN (Wi-Fi/Ethernet) IPv4 so others on the same network
 // can be told exactly which address to open.
 function lanIPs() {
@@ -1850,6 +1869,7 @@ app.listen(PORT, '0.0.0.0', () => {
     ips.forEach(ip => console.log(`   → http://${ip}:${PORT}`));
     console.log(`   (If it doesn't open on other devices, allow TCP port ${PORT} through Windows Firewall.)`);
   }
+  ensureFirewallOpen(); // best-effort: open the firewall so LAN/Wi-Fi devices can connect
   console.log(`\n👑 Super Admin : superadmin@dhishaai.com / superadmin123`);
   console.log(`📘 Python Admin: priya@dhishaai.com     / python123`);
   console.log(`📗 SQL Admin   : ravi@dhishaai.com      / sql123`);
