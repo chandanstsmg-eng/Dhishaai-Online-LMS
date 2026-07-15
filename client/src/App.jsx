@@ -2506,6 +2506,15 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
       } catch (e) { /* non-blocking; they can re-open the material */ }
     };
 
+    // Materials the admin uploaded without a module (moduleIndex null/blank) — or
+    // pointing at a module that doesn't exist — would otherwise never appear in
+    // the module list. Surface them in a "Course Materials" card so every
+    // uploaded PDF stays viewable.
+    const shownModuleIdxs = new Set(modules.map(m => m.index));
+    const looseMaterials = materials.filter(x =>
+      Number(x.courseId) === selected.id &&
+      (x.moduleIndex === null || x.moduleIndex === undefined || x.moduleIndex === "" || !shownModuleIdxs.has(Number(x.moduleIndex))));
+
     // Mark a whole module as studied — records real completion of its topics.
     // Guarded: every attached PDF must be read to the end first.
     const markModule = async m => {
@@ -2684,6 +2693,29 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
                   {t.duration && <span style={{ fontSize: 12, color: "var(--text2)" }}>⏱ {t.duration}</span>}
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {looseMaterials.length > 0 && (
+          <div className="card-flat" style={{ padding: "clamp(16px,3vw,22px)", marginBottom: 20 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text2)", letterSpacing: .5, textTransform: "uppercase", marginBottom: 12 }}>Course Materials</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {looseMaterials.map(mat => {
+                const read = materialRead(mat.id);
+                return (
+                  <div key={mat.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 10, border: `1.5px solid ${read ? B.success : B.navy}33`, background: `${read ? B.success : B.navy}08` }}>
+                    <div style={{ width: 34, height: 34, borderRadius: 9, background: `${read ? B.success : B.navy}18`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <Ico n={read ? "check" : "book"} s={17} c={read ? B.success : B.navy} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)" }}>{mat.title}</div>
+                      <div style={{ fontSize: 12, color: read ? B.success : "var(--text2)", fontWeight: read ? 700 : 400 }}>{read ? "✓ Read to the end" : mat.fileName ? "📄 Presentation · view only" : "Material"}</div>
+                    </div>
+                    <button className="btn btn-primary btn-sm" onClick={() => setViewer(mat)}><Ico n="play" s={13} />{read ? "Review" : "View"}</button>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
