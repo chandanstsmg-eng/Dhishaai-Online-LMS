@@ -1755,7 +1755,7 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
     if (!modForm.title.trim()) { show("Enter a module title", "error"); return; }
     const topics = modForm.topics.split("\n").map(t => t.trim()).filter(Boolean);
     try {
-      if (modForm.index == null) await POST(`/courses/${modCourse.id}/modules`, { title: modForm.title, topics, insertAt: modForm.insertAt === "" ? null : Number(modForm.insertAt) });
+      if (modForm.index == null) await POST(`/courses/${modCourse.id}/modules`, { title: modForm.title, topics, insertAt: modForm.insertAt === "" ? null : Number(modForm.insertAt) - 1 });
       else await PUT(`/courses/${modCourse.id}/modules/${modForm.index}`, { title: modForm.title, topics });
       setModForm({ index: null, title: "", topics: "", insertAt: "" }); await reloadModCourse(); onCourseChange?.(); show("Module saved");
     } catch (e) { show(e.message, "error"); }
@@ -1868,15 +1868,25 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
           )}
           <div style={{ background: "var(--surface2)", borderRadius: 12, padding: 16, border: "1px solid var(--border)" }}>
             <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)", marginBottom: 10 }}>{modForm.index == null ? "Add Module" : `Edit Module ${modForm.index + 1}`}</div>
-            {modForm.index == null && (modCourse.modules || []).length > 0 && (
-              <div className="form-group">
-                <label className="form-label">Position <span style={{ color: "var(--text2)", fontWeight: 500 }}>(where to add it)</span></label>
-                <select className="input-field" value={modForm.insertAt} onChange={e => setModForm(f => ({ ...f, insertAt: e.target.value }))}>
-                  <option value="">At the end — Module {(modCourse.modules || []).length + 1}</option>
-                  {(modCourse.modules || []).map((m, i) => <option key={i} value={i}>Before Module {i + 1}{m.title ? ` — ${m.title}` : ""}</option>)}
-                </select>
-              </div>
-            )}
+            {modForm.index == null && (modCourse.modules || []).length > 0 && (() => {
+              const total = (modCourse.modules || []).length;
+              const typed = modForm.insertAt === "" ? null : Number(modForm.insertAt);
+              const willBe = typed == null ? total + 1 : Math.min(Math.max(1, typed), total + 1);
+              return (
+                <div className="form-group">
+                  <label className="form-label">Module number <span style={{ color: "var(--text2)", fontWeight: 500 }}>(type 1–{total + 1}; leave blank to add at the end)</span></label>
+                  <input className="input-field" type="number" min="1" max={total + 1}
+                    placeholder={`e.g. ${total + 1}  (end)`}
+                    value={modForm.insertAt}
+                    onChange={e => setModForm(f => ({ ...f, insertAt: e.target.value }))} />
+                  <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 6 }}>
+                    {typed == null
+                      ? `Will be added as Module ${total + 1} (at the end).`
+                      : `Will become Module ${willBe}${willBe <= total ? " — the current modules from here shift down one." : " (at the end)."}`}
+                  </div>
+                </div>
+              );
+            })()}
             <div className="form-group"><label className="form-label">Module Title</label><input className="input-field" placeholder="e.g. Introduction to Power BI" value={modForm.title} onChange={e => setModForm(f => ({ ...f, title: e.target.value }))} /></div>
             <div className="form-group"><label className="form-label">Topics <span style={{ color: "var(--text2)", fontWeight: 500 }}>(one per line)</span></label><textarea className="input-field" rows={4} placeholder={"What is Power BI\nArchitecture & Components\nLicensing & Versions"} value={modForm.topics} onChange={e => setModForm(f => ({ ...f, topics: e.target.value }))} style={{ resize: "vertical" }} /></div>
             <div style={{ display: "flex", gap: 8 }}>
@@ -2507,7 +2517,15 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
     // Materials the student has read all the way to the last page.
     const viewed = prog?.viewedMaterials || [];
     const materialRead = id => viewed.some(v => String(v) === String(id));
-    const materialsForModule = m => materials.filter(x => Number(x.courseId) === selected.id && x.moduleIndex === m.index);
+    // A material is "unassigned" if it has no module (or points at a module that
+    // no longer exists). Those fold into the FIRST module so their View button
+    // shows inside a module — never in a separate section.
+    const moduleIdxSet = new Set(modules.map(mm => mm.index));
+    const isUnassignedMat = x => Number(x.courseId) === selected.id &&
+      (x.moduleIndex === null || x.moduleIndex === undefined || x.moduleIndex === "" || !moduleIdxSet.has(Number(x.moduleIndex)));
+    const materialsForModule = m => materials.filter(x =>
+      Number(x.courseId) === selected.id &&
+      (Number(x.moduleIndex) === m.index || (m.index === 0 && isUnassignedMat(x))));
     // A module can only be completed once EVERY attached PDF has been read to the
     // end. A module with no material has nothing to read, so this is vacuously true.
     const moduleMaterialsRead = m => materialsForModule(m).every(mat => materialRead(mat.id));
@@ -2545,7 +2563,7 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
       if (!mat || materialRead(mat.id)) return;
       try {
         await POST("/progress/material-viewed", { courseId: selected.id, materialId: mat.id });
-        const mod = modules.find(mm => mm.index === Number(mat.moduleIndex));
+        const mod = modules.find(mm => mm.index === Number(mat.moduleIndex)) || (isUnassignedMat(mat) ? modules[0] : null);
         let completed = false;
         if (mod) {
           const nowViewed = new Set([...viewed.map(String), String(mat.id)]);
@@ -2557,14 +2575,6 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
       } catch (e) { /* non-blocking; they can re-open the material */ }
     };
 
-    // Materials the admin uploaded without a module (moduleIndex null/blank) — or
-    // pointing at a module that doesn't exist — would otherwise never appear in
-    // the module list. Surface them in a "Course Materials" card so every
-    // uploaded PDF stays viewable.
-    const shownModuleIdxs = new Set(modules.map(m => m.index));
-    const looseMaterials = materials.filter(x =>
-      Number(x.courseId) === selected.id &&
-      (x.moduleIndex === null || x.moduleIndex === undefined || x.moduleIndex === "" || !shownModuleIdxs.has(Number(x.moduleIndex))));
 
     // Mark a whole module as studied — records real completion of its topics.
     // Guarded: every attached PDF must be read to the end first.
@@ -2744,29 +2754,6 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
                   {t.duration && <span style={{ fontSize: 12, color: "var(--text2)" }}>⏱ {t.duration}</span>}
                 </div>
               ))}
-            </div>
-          </div>
-        )}
-
-        {looseMaterials.length > 0 && (
-          <div className="card-flat" style={{ padding: "clamp(16px,3vw,22px)", marginBottom: 20 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text2)", letterSpacing: .5, textTransform: "uppercase", marginBottom: 12 }}>Course Materials</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {looseMaterials.map(mat => {
-                const read = materialRead(mat.id);
-                return (
-                  <div key={mat.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 10, border: `1.5px solid ${read ? B.success : B.navy}33`, background: `${read ? B.success : B.navy}08` }}>
-                    <div style={{ width: 34, height: 34, borderRadius: 9, background: `${read ? B.success : B.navy}18`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      <Ico n={read ? "check" : "book"} s={17} c={read ? B.success : B.navy} />
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)" }}>{mat.title}</div>
-                      <div style={{ fontSize: 12, color: read ? B.success : "var(--text2)", fontWeight: read ? 700 : 400 }}>{read ? "✓ Read to the end" : mat.fileName ? "📄 Presentation · view only" : "Material"}</div>
-                    </div>
-                    <button className="btn btn-primary btn-sm" onClick={() => setViewer(mat)}><Ico n="play" s={13} />{read ? "Review" : "View"}</button>
-                  </div>
-                );
-              })}
             </div>
           </div>
         )}
