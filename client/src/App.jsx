@@ -2546,9 +2546,13 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
       (x.moduleIndex === null || x.moduleIndex === undefined || x.moduleIndex === "" || !moduleIdxSet.has(Number(x.moduleIndex)));
     // Sub-modules are shown in a stable, human order: numeric-aware by title/file
     // name (so "5…" < "6…" < "10…"), then by upload time — never random.
-    const subOrder = (a, b) =>
-      (a.title || a.fileName || "").localeCompare(b.title || b.fileName || "", undefined, { numeric: true, sensitivity: "base" })
-      || String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+    const subOrder = (a, b) => {
+      const oa = a.order == null ? Infinity : Number(a.order);
+      const ob = b.order == null ? Infinity : Number(b.order);
+      if (oa !== ob) return oa - ob; // explicit admin-set order wins
+      return (a.title || a.fileName || "").localeCompare(b.title || b.fileName || "", undefined, { numeric: true, sensitivity: "base" })
+        || String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+    };
     const materialsForModule = m => materials.filter(x =>
       Number(x.courseId) === selected.id &&
       (Number(x.moduleIndex) === m.index || (m.index === 0 && isUnassignedMat(x)))).sort(subOrder);
@@ -3566,7 +3570,7 @@ function fileColor(fileType) {
 }
 
 // ─── MATERIAL CARD ─────────────────────────────────────────────────────────────
-const MaterialCard = ({ m, course, batch, isAdmin, onDelete, onDownload, onView }) => {
+const MaterialCard = ({ m, course, batch, isAdmin, onDelete, onDownload, onView, onEdit }) => {
   const [downloading, setDownloading] = useState(false);
   const fc = fileColor(m.fileType);
 
@@ -3627,7 +3631,12 @@ const MaterialCard = ({ m, course, batch, isAdmin, onDelete, onDownload, onView 
             </button>
           )}
           {isAdmin && (
-            <button className="btn btn-danger btn-sm" onClick={() => onDelete(m.id)} style={{ marginLeft: "auto" }}>
+            <button className="btn btn-secondary btn-sm" onClick={() => onEdit?.(m)} style={{ gap: 6, marginLeft: "auto" }}>
+              <Ico n="edit" s={13} />Edit
+            </button>
+          )}
+          {isAdmin && (
+            <button className="btn btn-danger btn-sm" onClick={() => onDelete(m.id)}>
               <Ico n="trash" s={13} />
             </button>
           )}
@@ -3649,6 +3658,8 @@ const AssignmentsPage = ({ user }) => {
 
   // Upload modal state
   const [uploadModal, setUploadModal] = useState(false);
+  const [editMat, setEditMat] = useState(null); // material being edited
+  const [editForm, setEditForm] = useState({ title: "", description: "", courseId: "", moduleIndex: "", order: "", pinned: false });
   const [assignModal, setAssignModal] = useState(false);
   const [viewer, setViewer] = useState(null); // material being presented in-app (students)
   const [uploading, setUploading] = useState(false);
@@ -3729,6 +3740,33 @@ const AssignmentsPage = ({ user }) => {
       load();
     } catch (e) { show(e.message, "error"); }
     finally { setUploading(false); }
+  };
+
+  // ── Edit an existing material (rename, move module, set order/position) ──
+  const openEditMaterial = (m) => {
+    setEditForm({
+      title: m.title || "",
+      description: m.description || "",
+      courseId: m.courseId != null ? String(m.courseId) : "",
+      moduleIndex: m.moduleIndex != null ? String(m.moduleIndex) : "",
+      order: m.order != null ? String(m.order) : "",
+      pinned: !!m.pinned,
+    });
+    setEditMat(m);
+  };
+  const saveEditMaterial = async () => {
+    if (!editForm.title.trim()) { show("Title is required", "error"); return; }
+    try {
+      await PUT(`/materials/${editMat.id}`, {
+        title: editForm.title,
+        description: editForm.description,
+        courseId: editForm.courseId === "" ? null : editForm.courseId,
+        moduleIndex: editForm.moduleIndex === "" ? null : editForm.moduleIndex,
+        order: editForm.order === "" ? null : Number(editForm.order),
+        pinned: editForm.pinned,
+      });
+      show("Material updated"); setEditMat(null); load();
+    } catch (e) { show(e.message, "error"); }
   };
 
   // ── Create assignment ──
@@ -3854,6 +3892,7 @@ const AssignmentsPage = ({ user }) => {
                         onDelete={deleteMaterial}
                         onDownload={downloadMaterial}
                         onView={setViewer}
+                        onEdit={openEditMaterial}
                       />
                     ))}
                   </div>
@@ -3870,6 +3909,7 @@ const AssignmentsPage = ({ user }) => {
                       onDelete={deleteMaterial}
                       onDownload={downloadMaterial}
                       onView={setViewer}
+                      onEdit={openEditMaterial}
                     />
                   ))}
                 </div>
@@ -4019,6 +4059,46 @@ const AssignmentsPage = ({ user }) => {
               {uploading ? <><Spinner size={16} color="#fff" />Uploading...</> : <><Ico n="plus" s={15} />Upload Material</>}
             </button>
             <button className="btn btn-secondary" onClick={() => setUploadModal(false)}>Cancel</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ═══ EDIT MATERIAL MODAL ═══ */}
+      {editMat && (
+        <Modal title="Edit Material" onClose={() => setEditMat(null)}>
+          <div className="form-group"><label className="form-label">Title</label><input className="input-field" value={editForm.title} onChange={e => setEditForm(f => ({ ...f, title: e.target.value }))} /></div>
+          <div className="form-group">
+            <label className="form-label">Course</label>
+            <select className="input-field" value={editForm.courseId} onChange={e => setEditForm(f => ({ ...f, courseId: e.target.value, moduleIndex: "" }))}>
+              <option value="">— None (general / batch) —</option>
+              {courses.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+            </select>
+          </div>
+          {editForm.courseId && (() => {
+            const ec = courses.find(c => String(c.id) === String(editForm.courseId));
+            const mods = ec?.modules || [];
+            return (
+              <div className="form-group">
+                <label className="form-label">Module</label>
+                <select className="input-field" value={editForm.moduleIndex} onChange={e => setEditForm(f => ({ ...f, moduleIndex: e.target.value }))}>
+                  <option value="">— First module (unassigned) —</option>
+                  {mods.map((m, i) => <option key={i} value={i}>Module {i + 1}{m.title ? ` — ${m.title}` : ""}</option>)}
+                </select>
+              </div>
+            );
+          })()}
+          <div className="form-group">
+            <label className="form-label">Sub-module position <span style={{ color: "var(--text2)", fontWeight: 500 }}>(1, 2, 3 … — lower shows first; blank = auto by name)</span></label>
+            <input className="input-field" type="number" min="1" value={editForm.order} onChange={e => setEditForm(f => ({ ...f, order: e.target.value }))} placeholder="e.g. 2" />
+          </div>
+          <div className="form-group"><label className="form-label">Description</label><textarea className="input-field" rows={2} value={editForm.description} onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))} style={{ resize: "vertical" }} /></div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+            <Toggle checked={editForm.pinned} onChange={v => setEditForm(f => ({ ...f, pinned: v }))} />
+            <div style={{ fontSize: 13, color: "var(--text)" }}>📌 Pinned material</div>
+          </div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button className="btn btn-primary" style={{ flex: 1, justifyContent: "center" }} onClick={saveEditMaterial}>Save Changes</button>
+            <button className="btn btn-secondary" onClick={() => setEditMat(null)}>Cancel</button>
           </div>
         </Modal>
       )}

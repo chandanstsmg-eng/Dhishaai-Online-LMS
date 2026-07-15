@@ -1576,7 +1576,7 @@ app.get('/api/materials', auth, (req, res) => {
 
 app.post('/api/materials', auth, adminOrSuper, (req, res) => {
   if (!DB.materials) DB.materials = [];
-  const { courseId, batchId, title, description, type, fileData, fileName, fileType, fileSize, pinned, moduleIndex } = req.body;
+  const { courseId, batchId, title, description, type, fileData, fileName, fileType, fileSize, pinned, moduleIndex, order } = req.body;
   if (!title) return res.status(400).json({ error: 'Title required' });
   // size guard — ~5MB base64
   if (fileData && fileData.length > 7_000_000) return res.status(413).json({ error: 'File too large (max 5MB)' });
@@ -1591,6 +1591,7 @@ app.post('/api/materials', auth, adminOrSuper, (req, res) => {
     type: type || 'note',
     courseId: courseId ? Number(courseId) : null,
     moduleIndex: (moduleIndex === undefined || moduleIndex === null || moduleIndex === '') ? null : Number(moduleIndex),
+    order: (order === undefined || order === null || order === '') ? null : Number(order),
     batchId: batchId || null,
     adminId: adminRec?.id || null,
     adminName: req.user.name,
@@ -1646,8 +1647,22 @@ app.put('/api/materials/:id', auth, adminOrSuper, (req, res) => {
     const adminRec = getAdminRecord(req.user.id);
     if (DB.materials[idx].adminId !== adminRec?.id) return res.status(403).json({ error: 'Not yours' });
   }
-  const { title, description, pinned } = req.body;
-  DB.materials[idx] = { ...DB.materials[idx], title: title || DB.materials[idx].title, description: description ?? DB.materials[idx].description, pinned: pinned ?? DB.materials[idx].pinned };
+  const { title, description, pinned, courseId, moduleIndex, order } = req.body;
+  const cur = DB.materials[idx];
+  // If an admin is moving this to a course, it must be one of theirs.
+  if (req.user.role === 'admin' && courseId !== undefined && courseId !== null && courseId !== '') {
+    const adminRec = getAdminRecord(req.user.id);
+    if (!adminCourseIds(adminRec?.id).includes(Number(courseId))) return res.status(403).json({ error: 'Not your course' });
+  }
+  DB.materials[idx] = {
+    ...cur,
+    title: title || cur.title,
+    description: description ?? cur.description,
+    pinned: pinned ?? cur.pinned,
+    courseId: courseId !== undefined ? (courseId === '' || courseId === null ? null : Number(courseId)) : cur.courseId,
+    moduleIndex: moduleIndex !== undefined ? (moduleIndex === '' || moduleIndex === null ? null : Number(moduleIndex)) : cur.moduleIndex,
+    order: order !== undefined ? (order === '' || order === null ? null : Number(order)) : cur.order,
+  };
   saveDB();
   res.json({ ...DB.materials[idx], fileData: undefined });
 });
