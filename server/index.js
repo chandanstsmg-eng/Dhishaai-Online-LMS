@@ -61,6 +61,7 @@ let DB = {
   enroll_requests: [], // { id, studentId, studentName, courseId, courseTitle, status:'pending'|'approved'|'rejected', batchId, requestedAt, decidedAt, decidedBy }
   projects: [],     // { id, title, topic, description, assignType:'student'|'batch', studentId, batchId, courseId, maxMarks, adminId, adminName, createdAt, submissions:[{ studentId, studentName, link, note, submittedAt, marks, feedback, gradedAt, xpAwarded }] }
   group_sessions: [], // { id, hostId, hostName, courseId, topic, date, time, duration, note, createdAt, joiners:[{studentId, studentName}] } — student-run group study sessions
+  lesson_videos: [],  // { id, courseId, moduleIndex, title, description, videoUrl, visible, order, adminId, adminName, createdAt } — admin-added recorded video lessons
 };
 
 function loadDB() {
@@ -2044,6 +2045,91 @@ app.delete('/api/group-sessions/:id', auth, (req, res) => {
   const isHost = me && g.hostId === me.id;
   if (!isHost && !canModerateSession(req, g)) return res.status(403).json({ error: 'Only the host or admin can remove this' });
   DB.group_sessions = (DB.group_sessions || []).filter(x => x.id !== req.params.id);
+  saveDB();
+  res.json({ ok: true });
+});
+
+// ── LESSON VIDEOS (admin adds recorded-video links; can enable/disable each) ───
+function canEditVideoCourse(req, courseId) {
+  if (req.user.role === 'superadmin') return true;
+  if (req.user.role === 'admin') { const a = getAdminRecord(req.user.id); return !!a && adminCourseIds(a.id).includes(Number(courseId)); }
+  return false;
+}
+// List videos. Students: only VISIBLE videos for courses they're enrolled in.
+// Admin/super: all videos (incl. hidden) for their courses, so they can manage.
+app.get('/api/lesson-videos', auth, (req, res) => {
+  const all = DB.lesson_videos || [];
+  const sortV = (a, b) => (a.order == null ? Infinity : a.order) - (b.order == null ? Infinity : b.order)
+    || String(a.title || '').localeCompare(String(b.title || ''), undefined, { numeric: true })
+    || String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+  if (req.user.role === 'admin' || req.user.role === 'superadmin') {
+    let list = all;
+    if (req.user.role === 'admin') { const a = getAdminRecord(req.user.id); const ids = adminCourseIds(a?.id); list = all.filter(v => ids.includes(Number(v.courseId))); }
+    if (req.query.courseId) list = list.filter(v => Number(v.courseId) === Number(req.query.courseId));
+    return res.json(list.slice().sort(sortV));
+  }
+  const student = DB.students.find(s => s.userId === req.user.id);
+  if (!student) return res.json([]);
+  const enrolled = DB.enrollments.filter(e => e.studentId === student.id).map(e => e.courseId);
+  let list = all.filter(v => v.visible !== false && enrolled.includes(Number(v.courseId)));
+  if (req.query.courseId) list = list.filter(v => Number(v.courseId) === Number(req.query.courseId));
+  res.json(list.slice().sort(sortV));
+});
+app.post('/api/lesson-videos', auth, adminOrSuper, (req, res) => {
+  const { courseId, moduleIndex, title, description, videoUrl, visible, order } = req.body;
+  if (!title || !String(title).trim()) return res.status(400).json({ error: 'Title is required' });
+  if (!videoUrl || !String(videoUrl).trim()) return res.status(400).json({ error: 'Video link is required' });
+  if (!courseId) return res.status(400).json({ error: 'Course is required' });
+  if (!canEditVideoCourse(req, courseId)) return res.status(403).json({ error: 'Not your course' });
+  if (!Array.isArray(DB.lesson_videos)) DB.lesson_videos = [];
+  const adminRec = req.user.role === 'admin' ? getAdminRecord(req.user.id) : null;
+  const v = {
+    id: uuidv4(), courseId: Number(courseId),
+    moduleIndex: (moduleIndex === undefined || moduleIndex === null || moduleIndex === '') ? null : Number(moduleIndex),
+    title: String(title).slice(0, 200), description: String(description || '').slice(0, 500),
+    videoUrl: String(videoUrl).slice(0, 1000),
+    visible: visible === undefined ? true : !!visible,
+    order: (order === undefined || order === null || order === '') ? null : Number(order),
+    adminId: adminRec?.id || null, adminName: req.user.name, createdAt: new Date().toISOString(),
+  };
+  DB.lesson_videos.push(v);
+  saveDB();
+  res.status(201).json(v);
+});
+app.put('/api/lesson-videos/:id', auth, adminOrSuper, (req, res) => {
+  const idx = (DB.lesson_videos || []).findIndex(v => v.id === req.params.id);
+  if (idx < 0) return res.status(404).json({ error: 'Not found' });
+  const cur = DB.lesson_videos[idx];
+  if (!canEditVideoCourse(req, cur.courseId)) return res.status(403).json({ error: 'Not your course' });
+  const { title, description, videoUrl, moduleIndex, visible, order, courseId } = req.body;
+  if (courseId !== undefined && !canEditVideoCourse(req, courseId)) return res.status(403).json({ error: 'Not your course' });
+  DB.lesson_videos[idx] = {
+    ...cur,
+    title: title !== undefined ? String(title).slice(0, 200) : cur.title,
+    description: description !== undefined ? String(description).slice(0, 500) : cur.description,
+    videoUrl: videoUrl !== undefined ? String(videoUrl).slice(0, 1000) : cur.videoUrl,
+    courseId: courseId !== undefined ? Number(courseId) : cur.courseId,
+    moduleIndex: moduleIndex !== undefined ? (moduleIndex === '' || moduleIndex === null ? null : Number(moduleIndex)) : cur.moduleIndex,
+    visible: visible !== undefined ? !!visible : cur.visible,
+    order: order !== undefined ? (order === '' || order === null ? null : Number(order)) : cur.order,
+  };
+  saveDB();
+  res.json(DB.lesson_videos[idx]);
+});
+// Quick enable/disable toggle.
+app.post('/api/lesson-videos/:id/toggle', auth, adminOrSuper, (req, res) => {
+  const v = (DB.lesson_videos || []).find(x => x.id === req.params.id);
+  if (!v) return res.status(404).json({ error: 'Not found' });
+  if (!canEditVideoCourse(req, v.courseId)) return res.status(403).json({ error: 'Not your course' });
+  v.visible = v.visible === false ? true : false;
+  saveDB();
+  res.json(v);
+});
+app.delete('/api/lesson-videos/:id', auth, adminOrSuper, (req, res) => {
+  const v = (DB.lesson_videos || []).find(x => x.id === req.params.id);
+  if (!v) return res.status(404).json({ error: 'Not found' });
+  if (!canEditVideoCourse(req, v.courseId)) return res.status(403).json({ error: 'Not your course' });
+  DB.lesson_videos = (DB.lesson_videos || []).filter(x => x.id !== req.params.id);
   saveDB();
   res.json({ ok: true });
 });

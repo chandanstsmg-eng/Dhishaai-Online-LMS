@@ -32,7 +32,7 @@ const DB_FILE = process.env.DHISHA_SQLITE || path.join(__dirname, 'dhishaai.db')
 const COLLECTIONS = [
   'users', 'admins', 'courses', 'students', 'enrollments', 'quizzes',
   'quiz_results', 'progress', 'notifications', 'assignments', 'materials',
-  'topics', 'forum_posts', 'batches', 'authorities', 'enroll_requests', 'projects', 'group_sessions',
+  'topics', 'forum_posts', 'batches', 'authorities', 'enroll_requests', 'projects', 'group_sessions', 'lesson_videos',
 ];
 
 let db = null;

@@ -1743,6 +1743,27 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
     catch (e) { show(e.message, "error"); }
   };
 
+  // ── Lesson videos (admin adds video links; enable/disable per video) ──
+  const [videoCourse, setVideoCourse] = useState(null); // course whose videos are being managed
+  const [videoList, setVideoList] = useState([]);
+  const blankVideo = { id: null, title: "", videoUrl: "", description: "", moduleIndex: "", order: "" };
+  const [vForm, setVForm] = useState(blankVideo);
+  const loadVideos = (cid) => GET(`/lesson-videos?courseId=${cid}`).then(setVideoList).catch(() => {});
+  const openVideos = (c) => { setVideoCourse(c); setVForm(blankVideo); loadVideos(c.id); };
+  const saveVideo = async () => {
+    if (!vForm.title.trim()) { show("Enter a video title", "error"); return; }
+    if (!vForm.videoUrl.trim()) { show("Paste the video link", "error"); return; }
+    try {
+      const body = { title: vForm.title, videoUrl: vForm.videoUrl, description: vForm.description, courseId: videoCourse.id, moduleIndex: vForm.moduleIndex === "" ? null : Number(vForm.moduleIndex), order: vForm.order === "" ? null : Number(vForm.order) };
+      if (vForm.id) await PUT(`/lesson-videos/${vForm.id}`, body);
+      else await POST("/lesson-videos", body);
+      show(vForm.id ? "Video updated" : "Video added"); setVForm(blankVideo); loadVideos(videoCourse.id);
+    } catch (e) { show(e.message, "error"); }
+  };
+  const editVideo = (v) => setVForm({ id: v.id, title: v.title, videoUrl: v.videoUrl, description: v.description || "", moduleIndex: v.moduleIndex != null ? String(v.moduleIndex) : "", order: v.order != null ? String(v.order) : "" });
+  const toggleVideo = async (v) => { try { await POST(`/lesson-videos/${v.id}/toggle`, {}); loadVideos(videoCourse.id); } catch (e) { show(e.message, "error"); } };
+  const delVideo = async (v) => { if (!confirm(`Delete video "${v.title}"?`)) return; try { await DELETE(`/lesson-videos/${v.id}`); loadVideos(videoCourse.id); } catch (e) { show(e.message, "error"); } };
+
   // ── Admin-authored modules ──
   const [modCourse, setModCourse] = useState(null);
   const [modForm, setModForm] = useState({ index: null, title: "", topics: "", insertAt: "" });
@@ -1814,6 +1835,7 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 <button className="btn btn-outline btn-sm" style={{ justifyContent: "center" }} onClick={() => openModules(c)}><Ico n="book" s={14} />Manage Modules ({(c.modules || []).length})</button>
                 <button className="btn btn-outline btn-sm" style={{ justifyContent: "center" }} onClick={() => setTopicsModal(c)}><Ico n="assign" s={14} />Manage Topics</button>
+                <button className="btn btn-outline btn-sm" style={{ justifyContent: "center" }} onClick={() => openVideos(c)}><Ico n="play" s={14} />Lesson Videos</button>
                 <div style={{ display: "flex", gap: 8 }}>
                   <button className="btn btn-secondary btn-sm" style={{ flex: 1, justifyContent: "center" }} onClick={() => openEdit(c)}><Ico n="edit" s={14} />Edit</button>
                   <button className="btn btn-danger btn-sm" onClick={() => del(c.id)}><Ico n="trash" s={14} /></button>
@@ -1901,6 +1923,49 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
       )}
 
       {topicsModal && <CourseTopicsModal course={topicsModal} onClose={() => setTopicsModal(null)} />}
+
+      {/* ═══ LESSON VIDEOS MANAGER ═══ */}
+      {videoCourse && (
+        <Modal title={`Lesson Videos — ${videoCourse.title}`} onClose={() => { setVideoCourse(null); setVForm(blankVideo); }} wide>
+          <p style={{ color: "var(--text2)", fontSize: 13, marginBottom: 14 }}>Add recorded-video links (YouTube, Vimeo, Google Drive, or a direct file). They play <b>inside the platform</b>. Use the toggle to instantly enable/disable a video for students.</p>
+          <div style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+            <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10, color: "var(--text)" }}>{vForm.id ? "Edit video" : "Add a video"}</div>
+            <div className="form-group"><label className="form-label">Title</label><input className="input-field" value={vForm.title} onChange={e => setVForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Introduction to Power BI (recorded)" /></div>
+            <div className="form-group"><label className="form-label">Video link</label><input className="input-field" value={vForm.videoUrl} onChange={e => setVForm(f => ({ ...f, videoUrl: e.target.value }))} placeholder="https://youtube.com/watch?v=...  ·  Vimeo / Google Drive / .mp4" /></div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div className="form-group"><label className="form-label">Module <span style={{ color: "var(--text2)", fontWeight: 500 }}>(where students see it)</span></label>
+                <select className="input-field" value={vForm.moduleIndex} onChange={e => setVForm(f => ({ ...f, moduleIndex: e.target.value }))}>
+                  <option value="">First module</option>
+                  {(videoCourse.modules || []).map((m, i) => <option key={i} value={i}>Module {i + 1}{m.title ? ` — ${m.title}` : ""}</option>)}
+                </select>
+              </div>
+              <div className="form-group"><label className="form-label">Order <span style={{ color: "var(--text2)", fontWeight: 500 }}>(optional)</span></label><input className="input-field" type="number" min="1" value={vForm.order} onChange={e => setVForm(f => ({ ...f, order: e.target.value }))} placeholder="1, 2, 3…" /></div>
+            </div>
+            <div className="form-group"><label className="form-label">Description (optional)</label><input className="input-field" value={vForm.description} onChange={e => setVForm(f => ({ ...f, description: e.target.value }))} /></div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-primary btn-sm" onClick={saveVideo}>{vForm.id ? "Save changes" : "＋ Add video"}</button>
+              {vForm.id && <button className="btn btn-secondary btn-sm" onClick={() => setVForm(blankVideo)}>Cancel edit</button>}
+            </div>
+          </div>
+          {videoList.length === 0 ? <div style={{ fontSize: 13, color: "var(--text2)", textAlign: "center", padding: 20 }}>No videos yet — add one above.</div> : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {videoList.map(v => (
+                <div key={v.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: 12, borderRadius: 10, border: "1px solid var(--border)", background: v.visible === false ? "var(--surface2)" : "var(--surface)", opacity: v.visible === false ? 0.65 : 1 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13.5, color: "var(--text)" }}>🎬 {v.title}{v.visible === false && <span className="badge badge-navy" style={{ marginLeft: 8 }}>Hidden</span>}</div>
+                    <div style={{ fontSize: 12, color: "var(--text2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.moduleIndex != null ? `Module ${v.moduleIndex + 1} · ` : ""}{v.videoUrl}</div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                    <Toggle checked={v.visible !== false} onChange={() => toggleVideo(v)} label={v.visible === false ? "Off" : "On"} />
+                    <button className="btn btn-secondary btn-xs" onClick={() => editVideo(v)}>Edit</button>
+                    <button className="btn btn-danger btn-xs" onClick={() => delVideo(v)}><Ico n="trash" s={12} /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Modal>
+      )}
 
       {modal && (
         <Modal title={modal === "add" ? "Add Course" : "Edit Course"} onClose={() => setModal(null)}>
@@ -2446,6 +2511,7 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
   const [confirmSubmit, setConfirmSubmit] = useState(false);
   const [quizTimeLeft, setQuizTimeLeft] = useState(null);
   const [materials, setMaterials] = useState([]);
+  const [videos, setVideos] = useState([]); // admin-added lesson videos (visible ones only)
   const [viewer, setViewer] = useState(null); // material being presented in-app
   const [lessons, setLessons] = useState([]); // admin-managed course topics (live-synced)
   const [reviseMode, setReviseMode] = useState(false); // "improve my score" revision panel
@@ -2456,6 +2522,7 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
     GET("/courses").then(setCourses);
     GET("/quizzes").then(setQuizzes).catch(() => {});
     GET("/materials").then(setMaterials).catch(() => {});
+    GET("/lesson-videos").then(setVideos).catch(() => {});
     loadProgress();
   }, []);
 
@@ -2556,6 +2623,12 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
     const materialsForModule = m => materials.filter(x =>
       Number(x.courseId) === selected.id &&
       (Number(x.moduleIndex) === m.index || (m.index === 0 && isUnassignedMat(x)))).sort(subOrder);
+    // Admin-added lesson videos for this module (no-module videos fold into the first).
+    const isUnassignedVid = x => Number(x.courseId) === selected.id &&
+      (x.moduleIndex === null || x.moduleIndex === undefined || x.moduleIndex === "" || !moduleIdxSet.has(Number(x.moduleIndex)));
+    const videosForModule = m => videos.filter(x =>
+      Number(x.courseId) === selected.id &&
+      (Number(x.moduleIndex) === m.index || (m.index === 0 && isUnassignedVid(x)))).sort(subOrder);
     // A module can only be completed once EVERY attached PDF has been read to the
     // end. A module with no material has nothing to read, so this is vacuously true.
     const moduleMaterialsRead = m => materialsForModule(m).every(mat => materialRead(mat.id));
@@ -2811,6 +2884,7 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
               const topicsDone = moduleTopicsDone(m);
               const studied = moduleStudied(m); // topics done AND all sub-module PDFs read
               const modMats = materialsForModule(m);
+              const modVids = videosForModule(m);
               return (
                 <div key={m.index} className="card-flat" style={{ padding: 0, overflow: "hidden", opacity: unlocked ? 1 : .6 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", background: "var(--surface2)", borderBottom: "1px solid var(--border)" }}>
@@ -2872,6 +2946,16 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
                               </div>
                             );
                           })}
+                        </div>
+                      )}
+
+                      {/* Video lessons for this module (admin-added, enabled) */}
+                      {modVids.length > 0 && (
+                        <div style={{ border: "1px solid var(--border)", borderRadius: 10, background: "var(--surface)", overflow: "hidden" }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text2)", letterSpacing: .5, textTransform: "uppercase", padding: "10px 14px", borderBottom: "1px solid var(--border)", background: "var(--surface2)" }}>🎬 Video Lessons ({modVids.length})</div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 12 }}>
+                            {modVids.map(v => <VideoLesson key={v.id} v={v} />)}
+                          </div>
                         </div>
                       )}
 
@@ -3542,6 +3626,44 @@ const ForumPage = ({ user }) => {
 };
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
+// Turn a video URL (YouTube / Vimeo / Google Drive / direct file) into an
+// embeddable form. Falls back to an open-in-new-tab link for anything else.
+function toVideoEmbed(url) {
+  if (!url) return { type: "link", src: "" };
+  const u = String(url).trim();
+  let m = u.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/)|youtu\.be\/)([\w-]{11})/);
+  if (m) return { type: "iframe", src: `https://www.youtube.com/embed/${m[1]}` };
+  m = u.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+  if (m) return { type: "iframe", src: `https://player.vimeo.com/video/${m[1]}` };
+  m = u.match(/drive\.google\.com\/file\/d\/([\w-]+)/);
+  if (m) return { type: "iframe", src: `https://drive.google.com/file/d/${m[1]}/preview` };
+  if (/\.(mp4|webm|ogg|mov)(\?.*)?$/i.test(u)) return { type: "video", src: u };
+  return { type: "link", src: u };
+}
+
+// Renders a lesson video (embedded player, or a watch link for other hosts).
+const VideoLesson = ({ v }) => {
+  const emb = toVideoEmbed(v.videoUrl);
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "var(--surface)" }}>
+      <div style={{ padding: "12px 14px" }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)", display: "flex", alignItems: "center", gap: 8 }}><span>🎬</span>{v.title}</div>
+        {v.description && <div style={{ fontSize: 12.5, color: "var(--text2)", marginTop: 3 }}>{v.description}</div>}
+      </div>
+      {emb.type === "iframe" ? (
+        <div style={{ position: "relative", width: "100%", paddingTop: "56.25%", background: "#000" }}>
+          <iframe src={emb.src} title={v.title} allowFullScreen allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: 0 }} />
+        </div>
+      ) : emb.type === "video" ? (
+        <video src={emb.src} controls controlsList="nodownload" style={{ width: "100%", display: "block", background: "#000" }} />
+      ) : (
+        <div style={{ padding: "0 14px 14px" }}><a href={emb.src} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm" style={{ textDecoration: "none" }}>▶ Watch video</a></div>
+      )}
+    </div>
+  );
+};
+
 function formatBytes(bytes) {
   if (!bytes) return "";
   if (bytes < 1024) return bytes + " B";
