@@ -1252,6 +1252,7 @@ const AdminStudentsPage = ({ batches, courses }) => {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
   const [search, setSearch] = useState("");
+  const [batchFilter, setBatchFilter] = useState(""); // "" = all batches
   const [show, toastEl] = useToast();
   const [form, setForm] = useState({ name: "", email: "", phone: "", password: "student123", batchId: "", enrolledCourses: [], experience: "", company: "", qualification: "" });
   // Batches are managed locally so a batch created inline shows up immediately.
@@ -1327,7 +1328,9 @@ const AdminStudentsPage = ({ batches, courses }) => {
   };
 
   const toggleCourse = cid => setForm(f => ({ ...f, enrolledCourses: f.enrolledCourses.includes(cid) ? f.enrolledCourses.filter(c => c !== cid) : [...f.enrolledCourses, cid] }));
-  const filtered = students.filter(s => s.name.toLowerCase().includes(search.toLowerCase()) || s.email.toLowerCase().includes(search.toLowerCase()));
+  const filtered = students.filter(s =>
+    (s.name.toLowerCase().includes(search.toLowerCase()) || s.email.toLowerCase().includes(search.toLowerCase())) &&
+    (batchFilter === "" || String(s.batchId || "") === batchFilter));
 
   return (
     <div className="fadeIn">
@@ -1384,11 +1387,16 @@ const AdminStudentsPage = ({ batches, courses }) => {
         </div>
       )}
 
-      <div className="card-flat" style={{ padding: 14, marginBottom: 16, display: "flex", gap: 10 }}>
-        <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, background: "var(--surface2)", borderRadius: 9, padding: "8px 12px", border: "1px solid var(--border)" }}>
+      <div className="card-flat" style={{ padding: 14, marginBottom: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 180, display: "flex", alignItems: "center", gap: 8, background: "var(--surface2)", borderRadius: 9, padding: "8px 12px", border: "1px solid var(--border)" }}>
           <Ico n="search" s={15} c="var(--text2)" />
           <input style={{ background: "none", border: "none", fontSize: 14, color: "var(--text)", flex: 1, outline: "none" }} placeholder="Search students..." value={search} onChange={e => setSearch(e.target.value)} />
         </div>
+        <select className="input-field" value={batchFilter} onChange={e => setBatchFilter(e.target.value)} style={{ width: "auto", minWidth: 170, flexShrink: 0 }}>
+          <option value="">All batches</option>
+          {batchList.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select>
+        {batchFilter && <span className="badge badge-navy" style={{ alignSelf: "center" }}>{filtered.length} in {batchName(batchFilter)}</span>}
       </div>
       <div className="card-flat" style={{ overflow: "auto" }}>
         {loading ? <div style={{ padding: 40, textAlign: "center" }}><Spinner size={32} /></div> : filtered.length === 0 ? (
@@ -1719,8 +1727,8 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
 
   // ── Admin-authored modules ──
   const [modCourse, setModCourse] = useState(null);
-  const [modForm, setModForm] = useState({ index: null, title: "", topics: "" });
-  const openModules = c => { setModCourse(c); setModForm({ index: null, title: "", topics: "" }); };
+  const [modForm, setModForm] = useState({ index: null, title: "", topics: "", insertAt: "" });
+  const openModules = c => { setModCourse(c); setModForm({ index: null, title: "", topics: "", insertAt: "" }); };
   const reloadModCourse = async () => {
     const list = await GET("/courses"); setCourses(list);
     setModCourse(mc => (mc ? list.find(c => c.id === mc.id) || null : null));
@@ -1729,12 +1737,12 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
     if (!modForm.title.trim()) { show("Enter a module title", "error"); return; }
     const topics = modForm.topics.split("\n").map(t => t.trim()).filter(Boolean);
     try {
-      if (modForm.index == null) await POST(`/courses/${modCourse.id}/modules`, { title: modForm.title, topics });
+      if (modForm.index == null) await POST(`/courses/${modCourse.id}/modules`, { title: modForm.title, topics, insertAt: modForm.insertAt === "" ? null : Number(modForm.insertAt) });
       else await PUT(`/courses/${modCourse.id}/modules/${modForm.index}`, { title: modForm.title, topics });
-      setModForm({ index: null, title: "", topics: "" }); await reloadModCourse(); onCourseChange?.(); show("Module saved");
+      setModForm({ index: null, title: "", topics: "", insertAt: "" }); await reloadModCourse(); onCourseChange?.(); show("Module saved");
     } catch (e) { show(e.message, "error"); }
   };
-  const editModule = (m, i) => setModForm({ index: i, title: m.title, topics: (m.topics || []).join("\n") });
+  const editModule = (m, i) => setModForm({ index: i, title: m.title, topics: (m.topics || []).join("\n"), insertAt: "" });
   const deleteModule = async i => {
     if (!confirm("Delete this module? Its attached notes/quiz will be unlinked.")) return;
     try { await DELETE(`/courses/${modCourse.id}/modules/${i}`); await reloadModCourse(); onCourseChange?.(); show("Module removed"); }
@@ -1799,7 +1807,7 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
       )}
 
       {modCourse && (
-        <Modal title={`Modules — ${modCourse.title}`} onClose={() => { setModCourse(null); setModForm({ index: null, title: "", topics: "" }); }} wide>
+        <Modal title={`Modules — ${modCourse.title}`} onClose={() => { setModCourse(null); setModForm({ index: null, title: "", topics: "", insertAt: "" }); }} wide>
           <p style={{ color: "var(--text2)", fontSize: 13, marginBottom: 12 }}>Add modules one by one. By default each module unlocks the next after its quiz is passed (70%+).</p>
 
           {/* Admin-controlled lesson release */}
@@ -1841,12 +1849,21 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
             </div>
           )}
           <div style={{ background: "var(--surface2)", borderRadius: 12, padding: 16, border: "1px solid var(--border)" }}>
-            <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)", marginBottom: 10 }}>{modForm.index == null ? `Add Module ${(modCourse.modules || []).length + 1}` : `Edit Module ${modForm.index + 1}`}</div>
+            <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)", marginBottom: 10 }}>{modForm.index == null ? "Add Module" : `Edit Module ${modForm.index + 1}`}</div>
+            {modForm.index == null && (modCourse.modules || []).length > 0 && (
+              <div className="form-group">
+                <label className="form-label">Position <span style={{ color: "var(--text2)", fontWeight: 500 }}>(where to add it)</span></label>
+                <select className="input-field" value={modForm.insertAt} onChange={e => setModForm(f => ({ ...f, insertAt: e.target.value }))}>
+                  <option value="">At the end — Module {(modCourse.modules || []).length + 1}</option>
+                  {(modCourse.modules || []).map((m, i) => <option key={i} value={i}>Before Module {i + 1}{m.title ? ` — ${m.title}` : ""}</option>)}
+                </select>
+              </div>
+            )}
             <div className="form-group"><label className="form-label">Module Title</label><input className="input-field" placeholder="e.g. Introduction to Power BI" value={modForm.title} onChange={e => setModForm(f => ({ ...f, title: e.target.value }))} /></div>
             <div className="form-group"><label className="form-label">Topics <span style={{ color: "var(--text2)", fontWeight: 500 }}>(one per line)</span></label><textarea className="input-field" rows={4} placeholder={"What is Power BI\nArchitecture & Components\nLicensing & Versions"} value={modForm.topics} onChange={e => setModForm(f => ({ ...f, topics: e.target.value }))} style={{ resize: "vertical" }} /></div>
             <div style={{ display: "flex", gap: 8 }}>
               <button className="btn btn-primary btn-sm" onClick={saveModule}>{modForm.index == null ? "＋ Add Module" : "Save Changes"}</button>
-              {modForm.index != null && <button className="btn btn-secondary btn-sm" onClick={() => setModForm({ index: null, title: "", topics: "" })}>Cancel edit</button>}
+              {modForm.index != null && <button className="btn btn-secondary btn-sm" onClick={() => setModForm({ index: null, title: "", topics: "", insertAt: "" })}>Cancel edit</button>}
             </div>
           </div>
           <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 14, lineHeight: 1.6 }}>
@@ -2495,14 +2512,30 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
       ? Math.round(quizzesInCourse.reduce((a, q) => a + bestPct(q.quiz.id), 0) / quizzesInCourse.length)
       : 0;
 
-    // Record that the student reached the last page of a material's PDF. This is
-    // what unlocks the "Mark Module as Complete" action for that module.
+    // Mark a module's topics as completed (records real, persisted progress).
+    const completeModuleTopics = async (m, baseDone = done) => {
+      const add = m.topics.map(t => t.globalIndex).filter(gi => !baseDone.includes(gi));
+      if (!add.length) return;
+      const next = [...baseDone, ...add];
+      const pct = Math.round((next.length / totalTopics) * 100);
+      await PUT("/progress", { courseId: selected.id, percent: pct, completedLessons: next });
+    };
+
+    // Student reached the last page of a material's PDF. Record it, and if it was
+    // the module's last unread PDF, AUTO-complete the module (no button needed).
     const markMaterialRead = async mat => {
       if (!mat || materialRead(mat.id)) return;
       try {
         await POST("/progress/material-viewed", { courseId: selected.id, materialId: mat.id });
-        loadProgress();
-        show("You've read the material to the end — you can now complete this module. ✓");
+        const mod = modules.find(mm => mm.index === Number(mat.moduleIndex));
+        let completed = false;
+        if (mod) {
+          const nowViewed = new Set([...viewed.map(String), String(mat.id)]);
+          const allRead = materialsForModule(mod).every(x => nowViewed.has(String(x.id)));
+          if (allRead) { await completeModuleTopics(mod); completed = true; }
+        }
+        await loadProgress();
+        show(completed ? "✓ Module completed — you finished the material." : "Material read ✓");
       } catch (e) { /* non-blocking; they can re-open the material */ }
     };
 
@@ -2729,7 +2762,6 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
               const complete = moduleComplete(m);
               const topicsDone = moduleTopicsDone(m);
               const modMats = materialsForModule(m);
-              const materialsRead = moduleMaterialsRead(m); // all PDFs read to the end
               return (
                 <div key={m.index} className="card-flat" style={{ padding: 0, overflow: "hidden", opacity: unlocked ? 1 : .6 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", background: "var(--surface2)", borderBottom: "1px solid var(--border)" }}>
@@ -2747,22 +2779,7 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
 
                   {unlocked && (
                     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
-                      {modMats.map(mat => {
-                        const read = materialRead(mat.id);
-                        return (
-                        <div key={mat.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 10, border: `1.5px solid ${read ? B.success : B.navy}33`, background: `${read ? B.success : B.navy}08` }}>
-                          <div style={{ width: 34, height: 34, borderRadius: 9, background: `${read ? B.success : B.navy}18`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                            <Ico n={read ? "check" : "book"} s={17} c={read ? B.success : B.navy} />
-                          </div>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)" }}>{mat.title}</div>
-                            <div style={{ fontSize: 12, color: read ? B.success : "var(--text2)", fontWeight: read ? 700 : 400 }}>{read ? "✓ Read to the end" : "📊 Read to the last page to unlock this module"}</div>
-                          </div>
-                          <button className="btn btn-primary btn-sm" onClick={() => setViewer(mat)}><Ico n="play" s={13} />{read ? "Review" : "Read"}</button>
-                        </div>
-                        );
-                      })}
-                      {/* Syllabus — what this module covers (read-only) */}
+                      {/* Topics — what this module covers */}
                       <div style={{ padding: "12px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--surface)" }}>
                         <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text2)", letterSpacing: .5, textTransform: "uppercase", marginBottom: 10 }}>Topics covered in this module</div>
                         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -2775,16 +2792,33 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
                           ))}
                         </div>
                         {topicsDone
-                          ? <div style={{ marginTop: 12, fontSize: 13, color: B.success, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}><Ico n="check" s={14} c={B.success} />Module studied</div>
-                          : materialsRead
+                          ? <div style={{ marginTop: 12, fontSize: 13, color: B.success, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}><Ico n="check" s={14} c={B.success} />Module completed</div>
+                          : modMats.length === 0
                             ? <button className="btn btn-primary btn-sm" style={{ marginTop: 12 }} onClick={() => markModule(m)}><Ico n="check" s={13} />Mark Module as Complete</button>
                             : <div style={{ marginTop: 12, fontSize: 13, color: "var(--text2)", fontWeight: 600, display: "flex", alignItems: "center", gap: 8, background: `${B.orange}12`, border: `1px solid ${B.orange}44`, borderRadius: 10, padding: "10px 14px" }}>
                                 <Ico n="lock" s={14} c={B.orange} />
-                                {modMats.length > 1 ? "Read every material above to the last page to complete this module." : "Open the material above and read to the last page to complete this module."}
+                                Read the {modMats.length > 1 ? "materials" : "material"} below to the last page — the module then completes automatically and the quiz unlocks.
                               </div>}
                       </div>
 
-                      {/* Module quiz gate */}
+                      {/* Study material (PDF) — View sits directly above the quiz */}
+                      {modMats.map(mat => {
+                        const read = materialRead(mat.id);
+                        return (
+                          <div key={mat.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 10, border: `1.5px solid ${read ? B.success : B.navy}33`, background: `${read ? B.success : B.navy}08` }}>
+                            <div style={{ width: 34, height: 34, borderRadius: 9, background: `${read ? B.success : B.navy}18`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                              <Ico n={read ? "check" : "book"} s={17} c={read ? B.success : B.navy} />
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)" }}>{mat.title}</div>
+                              <div style={{ fontSize: 12, color: read ? B.success : "var(--text2)", fontWeight: read ? 700 : 400 }}>{read ? "✓ Read to the end" : "📄 Open and read to the last page"}</div>
+                            </div>
+                            <button className="btn btn-primary btn-sm" onClick={() => setViewer(mat)}><Ico n="play" s={13} />{read ? "Review" : "View"}</button>
+                          </div>
+                        );
+                      })}
+
+                      {/* Module quiz gate — right below the View option */}
                       {m.quiz && (
                         <div style={{ marginTop: 4, padding: "14px 16px", borderRadius: 12, border: `1.5px dashed ${quizPassed(m.quiz) ? B.success : topicsDone ? B.orange : "var(--border)"}`, background: "var(--surface2)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                           <div style={{ width: 34, height: 34, borderRadius: 9, background: `${B.orange}18`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -2793,7 +2827,7 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
                           <div style={{ flex: 1, minWidth: 140 }}>
                             <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)" }}>{m.quiz.title}</div>
                             <div style={{ fontSize: 12, color: "var(--text2)" }}>
-                              {quizPassed(m.quiz) ? "Passed ✓ — module complete" : topicsDone ? "Score 70%+ to unlock the next module" : "Mark the module complete above to take the quiz"}
+                              {quizPassed(m.quiz) ? "Passed ✓ — module complete" : topicsDone ? "Score 70%+ to unlock the next module" : modMats.length ? "Finish the material above to unlock the quiz" : "Mark the module complete above to take the quiz"}
                             </div>
                           </div>
                           {quizPassed(m.quiz)

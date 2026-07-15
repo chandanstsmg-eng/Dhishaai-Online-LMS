@@ -935,8 +935,19 @@ app.post('/api/courses/:id/modules', auth, adminOrSuper, (req, res) => {
   if (!c) return res.status(404).json({ error: 'Not found' });
   if (!canEditCourse(req, c)) return res.status(403).json({ error: 'Not your course' });
   if (!Array.isArray(c.modules)) c.modules = [];
-  const { title, topics } = req.body;
-  c.modules.push({ title: title || `Module ${c.modules.length + 1}`, topics: Array.isArray(topics) ? topics.filter(t => t && t.trim()).map(t => t.trim()) : [] });
+  const { title, topics, insertAt } = req.body;
+  const mod = { title: title || `Module ${c.modules.length + 1}`, topics: Array.isArray(topics) ? topics.filter(t => t && t.trim()).map(t => t.trim()) : [] };
+  const wasLen = c.modules.length;
+  // insertAt (0-based) lets the admin place the module at a chosen position;
+  // null/blank appends to the end.
+  const pos = (insertAt === undefined || insertAt === null || insertAt === '')
+    ? wasLen : Math.max(0, Math.min(wasLen, parseInt(insertAt)));
+  c.modules.splice(pos, 0, mod);
+  // Keep attached notes/quizzes aligned with their module after an insert.
+  if (pos < wasLen) {
+    DB.materials.forEach(m => { if (Number(m.courseId) === id && m.moduleIndex != null && m.moduleIndex >= pos) m.moduleIndex += 1; });
+    DB.quizzes.forEach(q => { if (q.courseId === id && q.moduleIndex != null && q.moduleIndex >= pos) q.moduleIndex += 1; });
+  }
   saveDB();
   res.status(201).json(c);
 });
