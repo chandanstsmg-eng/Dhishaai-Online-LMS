@@ -1946,6 +1946,12 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
               <button className="btn btn-primary btn-sm" onClick={saveVideo}>{vForm.id ? "Save changes" : "＋ Add video"}</button>
               {vForm.id && <button className="btn btn-secondary btn-sm" onClick={() => setVForm(blankVideo)}>Cancel edit</button>}
             </div>
+            {vForm.videoUrl.trim() && (
+              <div style={{ marginTop: 14 }}>
+                <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 6, fontWeight: 600 }}>Preview — this is exactly how students see it (plays inside the site):</div>
+                <VideoLesson v={{ title: vForm.title || "Preview", description: vForm.description, videoUrl: vForm.videoUrl }} />
+              </div>
+            )}
           </div>
           {videoList.length === 0 ? <div style={{ fontSize: 13, color: "var(--text2)", textAlign: "center", padding: 20 }}>No videos yet — add one above.</div> : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -3631,13 +3637,26 @@ const ForumPage = ({ user }) => {
 function toVideoEmbed(url) {
   if (!url) return { type: "link", src: "" };
   const u = String(url).trim();
-  let m = u.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/)|youtu\.be\/)([\w-]{11})/);
-  if (m) return { type: "iframe", src: `https://www.youtube.com/embed/${m[1]}` };
-  m = u.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+  // ── YouTube: match every shape, then embed inline (never redirect) ──
+  let ytId = null;
+  let m = u.match(/(?:youtube(?:-nocookie)?\.com\/(?:watch\?(?:[^#]*&)?v=|embed\/|shorts\/|live\/|v\/)|youtu\.be\/)([\w-]{11})/i);
+  if (m) ytId = m[1];
+  else if (/youtube\.com|youtu\.be/i.test(u)) {
+    const vp = u.match(/[?&]v=([\w-]{11})/);       // ?v=ID anywhere
+    if (vp) ytId = vp[1];
+    else { const seg = u.match(/([\w-]{11})(?:[?&#/]|$)/); if (seg) ytId = seg[1]; } // last 11-char token
+  }
+  if (ytId) return { type: "iframe", src: `https://www.youtube.com/embed/${ytId}?rel=0&modestbranding=1&playsinline=1` };
+  // ── Vimeo ──
+  m = u.match(/vimeo\.com\/(?:video\/)?(\d+)/i);
   if (m) return { type: "iframe", src: `https://player.vimeo.com/video/${m[1]}` };
-  m = u.match(/drive\.google\.com\/file\/d\/([\w-]+)/);
+  // ── Google Drive ──
+  m = u.match(/drive\.google\.com\/file\/d\/([\w-]+)/i);
   if (m) return { type: "iframe", src: `https://drive.google.com/file/d/${m[1]}/preview` };
-  if (/\.(mp4|webm|ogg|mov)(\?.*)?$/i.test(u)) return { type: "video", src: u };
+  m = u.match(/drive\.google\.com\/open\?id=([\w-]+)/i);
+  if (m) return { type: "iframe", src: `https://drive.google.com/file/d/${m[1]}/preview` };
+  // ── Direct video file ──
+  if (/\.(mp4|webm|ogg|mov|m4v)(\?.*)?$/i.test(u)) return { type: "video", src: u };
   return { type: "link", src: u };
 }
 
