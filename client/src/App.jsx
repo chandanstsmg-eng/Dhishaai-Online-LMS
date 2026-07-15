@@ -2468,6 +2468,27 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
     }
   }, [openCourseId, courses]);
 
+  // Exact course completion for the course cards — same unit formula as the
+  // detail view (topics done + sub-module PDFs read + quizzes passed).
+  const courseExactPct = c => {
+    const { modules } = buildModules(c, quizzes);
+    const prog = profile?.progress?.find(p => p.courseId === c.id);
+    const doneT = prog?.completedLessons || [];
+    const viewed = prog?.viewedMaterials || [];
+    const isRead = id => viewed.some(v => String(v) === String(id));
+    const idxSet = new Set(modules.map(m => m.index));
+    const matsFor = m => materials.filter(x => Number(x.courseId) === c.id &&
+      (Number(x.moduleIndex) === m.index || (m.index === 0 && (x.moduleIndex == null || x.moduleIndex === "" || !idxSet.has(Number(x.moduleIndex))))));
+    const passed = q => !!q && results.some(r => r.quizId === q.id && r.total && r.score / r.total >= 0.7);
+    let total = 0, dn = 0;
+    modules.forEach(m => {
+      m.topics.forEach(t => { total++; if (doneT.includes(t.globalIndex)) dn++; });
+      matsFor(m).forEach(mat => { total++; if (isRead(mat.id)) dn++; });
+      if (m.quiz) { total++; if (passed(m.quiz)) dn++; }
+    });
+    return total ? Math.min(100, Math.round((dn / total) * 100)) : 0;
+  };
+
   // Pull the admin-managed topic list for the open course (kept in sync on open).
   useEffect(() => {
     setReviseMode(false); // reset revision panel when switching courses
@@ -2523,9 +2544,14 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
     const moduleIdxSet = new Set(modules.map(mm => mm.index));
     const isUnassignedMat = x => Number(x.courseId) === selected.id &&
       (x.moduleIndex === null || x.moduleIndex === undefined || x.moduleIndex === "" || !moduleIdxSet.has(Number(x.moduleIndex)));
+    // Sub-modules are shown in a stable, human order: numeric-aware by title/file
+    // name (so "5…" < "6…" < "10…"), then by upload time — never random.
+    const subOrder = (a, b) =>
+      (a.title || a.fileName || "").localeCompare(b.title || b.fileName || "", undefined, { numeric: true, sensitivity: "base" })
+      || String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
     const materialsForModule = m => materials.filter(x =>
       Number(x.courseId) === selected.id &&
-      (Number(x.moduleIndex) === m.index || (m.index === 0 && isUnassignedMat(x))));
+      (Number(x.moduleIndex) === m.index || (m.index === 0 && isUnassignedMat(x)))).sort(subOrder);
     // A module can only be completed once EVERY attached PDF has been read to the
     // end. A module with no material has nothing to read, so this is vacuously true.
     const moduleMaterialsRead = m => materialsForModule(m).every(mat => materialRead(mat.id));
@@ -2538,7 +2564,17 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
     // otherwise fall back to auto-unlock (finish the previous module to open the next).
     const releasedSet = selected.manualRelease ? (Array.isArray(selected.releasedModules) ? selected.releasedModules : []) : null;
     const moduleUnlocked = m => releasedSet ? releasedSet.includes(m.index) : (m.index === 0 || moduleComplete(modules[m.index - 1]));
-    const overallPct = totalTopics ? Math.round((done.length / totalTopics) * 100) : 0;
+    // Exact completion: every topic done + every sub-module PDF read + every
+    // module quiz passed, over the total number of such units.
+    const overallPct = (() => {
+      let total = 0, dn = 0;
+      modules.forEach(m => {
+        m.topics.forEach(t => { total++; if (topicDone(t.globalIndex)) dn++; });
+        materialsForModule(m).forEach(mat => { total++; if (materialRead(mat.id)) dn++; });
+        if (m.quiz) { total++; if (quizPassed(m.quiz)) dn++; }
+      });
+      return total ? Math.min(100, Math.round((dn / total) * 100)) : 0;
+    })();
     const allComplete = modules.length > 0 && modules.every(moduleComplete);
 
     // Best (highest) quiz percentage across all of a student's attempts.
@@ -2880,7 +2916,7 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 20 }}>
           {courses.map(c => {
-            const pct = profile?.progress?.find(p => p.courseId === c.id)?.percent || 0;
+            const pct = courseExactPct(c);
             const cMods = courseModules(c);
             const cTopics = cMods.reduce((a, m) => a + m.topics.length, 0);
             return (
@@ -3622,7 +3658,7 @@ const AssignmentsPage = ({ user }) => {
   const fileInputRef = useRef(null);
   const isAdmin = user.role === "admin" || user.role === "superadmin";
 
-  const blankUpload = { title: "", description: "", type: "file", courseId: "", moduleIndex: "", batchId: "", pinned: false, file: null, fileData: null, fileName: null, fileType: null, fileSize: null };
+  const blankUpload = { title: "", description: "", type: "file", courseId: "", moduleIndex: "", batchId: "", pinned: false, file: null, fileData: null, fileName: null, fileType: null, fileSize: null, files: [] };
   const blankAssign = { title: "", description: "", courseId: "", batchId: "", dueDate: "" };
   const [uploadForm, setUploadForm] = useState(blankUpload);
   const [assignForm, setAssignForm] = useState(blankAssign);
@@ -3638,37 +3674,56 @@ const AssignmentsPage = ({ user }) => {
   };
   useEffect(() => { load(); }, []);
 
-  // ── File picker ──
+  // ── File picker (supports selecting several files → several sub-modules) ──
   const pickFile = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    if (file.size > 5 * 1024 * 1024) { show("File must be under 5MB", "error"); return; }
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      setUploadForm(f => ({ ...f, file, fileData: ev.target.result, fileName: file.name, fileType: file.type, fileSize: file.size }));
-    };
-    reader.readAsDataURL(file);
+    const list = Array.from(e.target.files || []);
+    if (!list.length) return;
+    const tooBig = list.find(f => f.size > 5 * 1024 * 1024);
+    if (tooBig) { show(`"${tooBig.name}" is over 5MB`, "error"); return; }
+    Promise.all(list.map(file => new Promise(res => {
+      const reader = new FileReader();
+      reader.onload = ev => res({ fileData: ev.target.result, fileName: file.name, fileType: file.type, fileSize: file.size });
+      reader.readAsDataURL(file);
+    }))).then(files => {
+      setUploadForm(f => ({ ...f, files,
+        fileData: files[0].fileData,
+        fileName: files.length > 1 ? `${files.length} files selected` : files[0].fileName,
+        fileType: files[0].fileType,
+        fileSize: files.reduce((a, x) => a + x.fileSize, 0),
+      }));
+    });
   };
 
-  // ── Upload material ──
+  // ── Upload material(s) ──
   const saveUpload = async () => {
-    if (!uploadForm.title) { show("Title is required", "error"); return; }
+    const files = (uploadForm.files && uploadForm.files.length)
+      ? uploadForm.files
+      : (uploadForm.fileData ? [{ fileData: uploadForm.fileData, fileName: uploadForm.fileName, fileType: uploadForm.fileType, fileSize: uploadForm.fileSize }] : []);
+    const common = {
+      description: uploadForm.description,
+      courseId: uploadForm.courseId || null,
+      moduleIndex: uploadForm.moduleIndex === "" ? null : uploadForm.moduleIndex,
+      batchId: uploadForm.batchId || null,
+      pinned: uploadForm.pinned,
+    };
     setUploading(true);
     try {
-      await POST("/materials", {
-        title: uploadForm.title,
-        description: uploadForm.description,
-        type: uploadForm.fileData ? "file" : "note",
-        courseId: uploadForm.courseId || null,
-        moduleIndex: uploadForm.moduleIndex === "" ? null : uploadForm.moduleIndex,
-        batchId: uploadForm.batchId || null,
-        fileData: uploadForm.fileData,
-        fileName: uploadForm.fileName,
-        fileType: uploadForm.fileType,
-        fileSize: uploadForm.fileSize,
-        pinned: uploadForm.pinned,
-      });
-      show("Material uploaded!");
+      if (files.length > 1) {
+        // Several PDFs → one material each, all on the same module (sub-modules).
+        const strip = n => n.replace(/\.[^.]+$/, "");
+        for (let i = 0; i < files.length; i++) {
+          await POST("/materials", { ...common, type: "file",
+            title: uploadForm.title ? `${uploadForm.title} ${i + 1}` : strip(files[i].fileName),
+            fileData: files[i].fileData, fileName: files[i].fileName, fileType: files[i].fileType, fileSize: files[i].fileSize });
+        }
+        show(`${files.length} PDFs uploaded as sub-modules!`);
+      } else {
+        if (!uploadForm.title) { show("Title is required", "error"); setUploading(false); return; }
+        const one = files[0] || {};
+        await POST("/materials", { ...common, title: uploadForm.title, type: one.fileData ? "file" : "note",
+          fileData: one.fileData || null, fileName: one.fileName || null, fileType: one.fileType || null, fileSize: one.fileSize || null });
+        show("Material uploaded!");
+      }
       setUploadModal(false);
       setUploadForm(blankUpload);
       load();
@@ -3729,7 +3784,7 @@ const AssignmentsPage = ({ user }) => {
       {toastEl}
       {viewer && <SlideViewer materialId={viewer.id} title={viewer.title} onClose={() => setViewer(null)}
         onReachedEnd={!isAdmin && viewer.courseId ? () => { POST("/progress/material-viewed", { courseId: viewer.courseId, materialId: viewer.id }).catch(() => {}); } : undefined} />}
-      <input ref={fileInputRef} type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.txt,.zip" style={{ display: "none" }} onChange={pickFile} />
+      <input ref={fileInputRef} type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.txt,.zip" style={{ display: "none" }} onChange={pickFile} />
 
       {/* Page Header */}
       <div className="section-header" style={{ flexWrap: "wrap", gap: 10 }}>
@@ -3926,18 +3981,27 @@ const AssignmentsPage = ({ user }) => {
             style={{ border: `2px dashed ${uploadForm.fileData ? B.success : "var(--border)"}`, borderRadius: 14, padding: "24px 20px", textAlign: "center", cursor: "pointer", marginBottom: 16, background: uploadForm.fileData ? `${B.success}06` : "var(--surface2)", transition: "all .2s" }}
           >
             {uploadForm.fileData ? (
-              <div>
-                <div style={{ fontSize: 32, marginBottom: 8 }}>
-                  {uploadForm.fileType?.includes("pdf") ? "📕" : uploadForm.fileType?.includes("image") ? "🖼️" : uploadForm.fileType?.includes("word") ? "📘" : uploadForm.fileType?.includes("sheet") ? "📗" : "📄"}
+              (uploadForm.files && uploadForm.files.length > 1) ? (
+                <div>
+                  <div style={{ fontSize: 32, marginBottom: 8 }}>📚</div>
+                  <div style={{ fontWeight: 700, color: B.success, fontSize: 14 }}>{uploadForm.files.length} PDFs selected — will be added as sub-modules</div>
+                  <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 4, lineHeight: 1.5 }}>{uploadForm.files.map(f => f.fileName).join(", ")}</div>
+                  <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 3 }}>Click to change</div>
                 </div>
-                <div style={{ fontWeight: 700, color: B.success, fontSize: 14 }}>{uploadForm.fileName}</div>
-                <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 3 }}>{formatBytes(uploadForm.fileSize)} · Click to change</div>
-              </div>
+              ) : (
+                <div>
+                  <div style={{ fontSize: 32, marginBottom: 8 }}>
+                    {uploadForm.fileType?.includes("pdf") ? "📕" : uploadForm.fileType?.includes("image") ? "🖼️" : uploadForm.fileType?.includes("word") ? "📘" : uploadForm.fileType?.includes("sheet") ? "📗" : "📄"}
+                  </div>
+                  <div style={{ fontWeight: 700, color: B.success, fontSize: 14 }}>{uploadForm.fileName}</div>
+                  <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 3 }}>{formatBytes(uploadForm.fileSize)} · Click to change</div>
+                </div>
+              )
             ) : (
               <div>
                 <div style={{ fontSize: 36, marginBottom: 8 }}>📎</div>
-                <div style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Click to attach a file</div>
-                <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 4 }}>PDF, Word, Excel, PowerPoint, Images · Max 5MB</div>
+                <div style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Click to attach file(s)</div>
+                <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 4 }}>PDF, Word, Excel, PowerPoint, Images · Max 5MB each · select several to add sub-modules</div>
               </div>
             )}
           </div>

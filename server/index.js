@@ -284,13 +284,34 @@ function courseTotalTopics(course) {
   }
   return 0;
 }
-// Live completion %: actually-completed topics / total topics — never a stale/stored
-// number. Falls back to the stored percent only when the topic count isn't known here.
+// Live completion %: computed from REAL learning units — every topic marked
+// done, every sub-module PDF read, and every module quiz passed — divided by the
+// total number of such units. Never a stale/stored number. Falls back to the
+// stored percent only when a course genuinely has no completable units.
 function livePercent(course, prog) {
-  const total = courseTotalTopics(course);
-  if (!total) return (prog && prog.percent) || 0;
-  const done = Math.min(((prog && prog.completedLessons) || []).length, total);
-  return Math.round((done / total) * 100);
+  const clamp = n => Math.max(0, Math.min(100, Math.round(n || 0)));
+  if (!course || !Array.isArray(course.modules)) return clamp(prog && prog.percent);
+  const modules = course.modules;
+  const done = (prog && prog.completedLessons) || [];
+  const viewed = (prog && prog.viewedMaterials) || [];
+  const studentId = prog && prog.studentId;
+  const idxSet = new Set(modules.map((_, i) => i));
+  const isRead = id => viewed.some(v => String(v) === String(id));
+  const courseQuizzes = (DB.quizzes || []).filter(q => q.courseId === course.id);
+  const untagged = courseQuizzes.filter(q => q.moduleIndex === undefined || q.moduleIndex === null);
+  const quizForModule = i => courseQuizzes.find(q => q.moduleIndex === i) || untagged[i] || null;
+  const matsForModule = i => (DB.materials || []).filter(m =>
+    Number(m.courseId) === course.id &&
+    (Number(m.moduleIndex) === i || (i === 0 && (m.moduleIndex === null || m.moduleIndex === undefined || m.moduleIndex === '' || !idxSet.has(Number(m.moduleIndex))))));
+  const passed = q => !!q && (DB.quiz_results || []).some(r => r.studentId === studentId && r.quizId === q.id && r.total && r.score / r.total >= 0.7);
+  let total = 0, dn = 0, gi = 0;
+  modules.forEach((m, i) => {
+    (m.topics || []).forEach(() => { total++; if (done.includes(gi)) dn++; gi++; });
+    matsForModule(i).forEach(mat => { total++; if (isRead(mat.id)) dn++; });
+    const q = quizForModule(i); if (q) { total++; if (passed(q)) dn++; }
+  });
+  if (total === 0) return clamp(prog && prog.percent);
+  return clamp((dn / total) * 100);
 }
 
 /** Build a rich, read-only report object for a student (used by authority views) */
