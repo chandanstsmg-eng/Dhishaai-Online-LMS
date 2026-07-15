@@ -25,6 +25,24 @@ const POST = (p, b) => api("POST", p, b);
 const PUT = (p, b) => api("PUT", p, b);
 const DELETE = (p) => api("DELETE", p);
 
+// Fetch a stored file ({ fileData, fileName, fileType }) from an API path and
+// open it (PDF/image in a new tab) or download it. Returns true on success.
+async function openStoredFile(path, fallbackName = "file") {
+  const data = await GET(path);
+  if (!data || !data.fileData) throw new Error("No file");
+  const blob = await (await fetch(data.fileData)).blob();
+  const url = URL.createObjectURL(blob);
+  const name = data.fileName || fallbackName;
+  const inline = /pdf|image/i.test(data.fileType || "") || /\.(pdf|png|jpe?g|gif|webp|svg)$/i.test(name);
+  if (inline) {
+    window.open(url, "_blank", "noopener");
+  } else {
+    const a = document.createElement("a"); a.href = url; a.download = name; a.click();
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  return true;
+}
+
 // ─── QUIZ ANTI-CHEAT GUARD ──────────────────────────────────────────────────────
 // While a quiz is in progress, leaving the tab/window (switching tabs, minimizing,
 // alt-tabbing) reports the student to their admin and forces them back to the
@@ -4915,9 +4933,18 @@ const AdminProjectsPage = ({ batches, courses }) => {
   const [projects, setProjects] = useState([]);
   const [students, setStudents] = useState([]);
   const [modal, setModal] = useState(false);
-  const [form, setForm] = useState({ title: "", topic: "", description: "", assignType: "student", studentId: "", batchId: "", courseId: "", maxMarks: 100 });
+  const blankProject = { title: "", topic: "", description: "", assignType: "student", studentId: "", batchId: "", courseId: "", maxMarks: 100, fileData: null, fileName: null, fileType: null };
+  const [form, setForm] = useState(blankProject);
   const [grade, setGrade] = useState({}); // `${pid}_${sid}` -> { marks, feedback }
   const [show, toastEl] = useToast();
+  const onProjFile = e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { show("File too large (max 5MB)", "error"); return; }
+    const reader = new FileReader();
+    reader.onload = ev => setForm(f => ({ ...f, fileData: ev.target.result, fileName: file.name, fileType: file.type }));
+    reader.readAsDataURL(file);
+  };
 
   const load = () => GET("/projects").then(setProjects).catch(() => {});
   useEffect(() => { load(); GET("/students").then(setStudents).catch(() => {}); }, []);
@@ -4929,7 +4956,7 @@ const AdminProjectsPage = ({ batches, courses }) => {
     try {
       await POST("/projects", { ...form, maxMarks: Number(form.maxMarks) || 100 });
       show("Project assigned"); setModal(false);
-      setForm({ title: "", topic: "", description: "", assignType: "student", studentId: "", batchId: "", courseId: "", maxMarks: 100 });
+      setForm(blankProject);
       load();
     } catch (e) { show(e.message, "error"); }
   };
@@ -4968,6 +4995,12 @@ const AdminProjectsPage = ({ batches, courses }) => {
                 <button className="btn btn-danger btn-xs" onClick={() => del(p)}><Ico n="trash" s={12} /></button>
               </div>
               {p.description && <div style={{ fontSize: 13, color: "var(--text2)", marginBottom: 12, whiteSpace: "pre-wrap" }}>{p.description}</div>}
+              {p.hasFile && (
+                <button className="btn btn-secondary btn-sm" style={{ marginBottom: 12 }}
+                  onClick={() => openStoredFile(`/projects/${p.id}/file`, p.fileName || "brief").catch(() => show("Could not open the file", "error"))}>
+                  <Ico n="assign" s={13} />Attached brief{p.fileName ? `: ${p.fileName}` : ""}
+                </button>
+              )}
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {p.rows.length === 0 ? <div style={{ fontSize: 12, color: "var(--text2)" }}>No students in this batch yet.</div> : p.rows.map(row => {
                   const key = `${p.id}_${row.studentId}`; const g = grade[key] || {};
@@ -4987,6 +5020,12 @@ const AdminProjectsPage = ({ batches, courses }) => {
                         </div>
                       </div>
                       {row.link && <div style={{ fontSize: 12, marginTop: 6 }}><a href={row.link} target="_blank" rel="noreferrer" style={{ color: B.orange }}>🔗 {row.link}</a></div>}
+                      {row.hasSubmissionFile && (
+                        <button className="btn btn-secondary btn-sm" style={{ marginTop: 6 }}
+                          onClick={() => openStoredFile(`/projects/${p.id}/submission-file?studentId=${row.studentId}`, row.submissionFileName || "submission").catch(() => show("Could not open the file", "error"))}>
+                          <Ico n="download" s={13} />View submitted file{row.submissionFileName ? `: ${row.submissionFileName}` : ""}
+                        </button>
+                      )}
                       {row.note && <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 4, whiteSpace: "pre-wrap" }}>📝 {row.note}</div>}
                       <input className="input-field" placeholder="Feedback (optional)" style={{ marginTop: 6, fontSize: 12.5, padding: "6px 10px" }} value={fbVal} onChange={e => setG(key, { feedback: e.target.value })} />
                     </div>
@@ -5033,9 +5072,21 @@ const AdminProjectsPage = ({ batches, courses }) => {
             </div>
             <div className="form-group"><label className="form-label">Max Marks</label><input className="input-field" type="number" min="1" value={form.maxMarks} onChange={e => setForm({ ...form, maxMarks: e.target.value })} /></div>
           </div>
+          <div className="form-group">
+            <label className="form-label">Attach a file <span style={{ color: "var(--text2)", fontWeight: 500 }}>(optional — brief, dataset or template · PDF/doc/image, max 5MB)</span></label>
+            {form.fileName ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 10, border: `1.5px solid ${B.success}55`, background: `${B.success}10` }}>
+                <Ico n="check" s={16} c={B.success} />
+                <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{form.fileName}</span>
+                <button type="button" onClick={() => setForm(f => ({ ...f, fileData: null, fileName: null, fileType: null }))} style={{ background: "none", border: "none", color: B.danger, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>Remove</button>
+              </div>
+            ) : (
+              <input type="file" onChange={onProjFile} className="input-field" style={{ padding: 8 }} />
+            )}
+          </div>
           <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
             <button className="btn btn-primary" style={{ flex: 1, justifyContent: "center" }} onClick={create}>Assign Project</button>
-            <button className="btn btn-secondary" onClick={() => setModal(false)}>Cancel</button>
+            <button className="btn btn-secondary" onClick={() => { setModal(false); setForm(blankProject); }}>Cancel</button>
           </div>
         </Modal>
       )}
@@ -5054,13 +5105,23 @@ const StudentProjectsPage = () => {
   useEffect(() => { load(); }, []);
 
   const setI = (id, patch) => setInputs(m => ({ ...m, [id]: { ...m[id], ...patch } }));
+  const onSubFile = (id, e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { show("File too large (max 5MB)", "error"); return; }
+    const reader = new FileReader();
+    reader.onload = ev => setI(id, { fileData: ev.target.result, fileName: file.name, fileType: file.type });
+    reader.readAsDataURL(file);
+  };
   const submit = async (p) => {
     const v = inputs[p.id] || {};
     const link = v.link !== undefined ? v.link : p.link;
     const note = v.note !== undefined ? v.note : p.note;
-    if (!link && !note) { show("Add a submission link or a note", "error"); return; }
-    try { await POST(`/projects/${p.id}/submit`, { link, note }); show("Submitted ✓"); load(); }
-    catch (e) { show(e.message, "error"); }
+    if (!link && !note && !v.fileData && !p.hasSubmissionFile) { show("Add a link, a note, or attach a file", "error"); return; }
+    try {
+      await POST(`/projects/${p.id}/submit`, { link, note, fileData: v.fileData, fileName: v.fileName, fileType: v.fileType });
+      show("Submitted ✓"); setI(p.id, { fileData: undefined, fileName: undefined, fileType: undefined }); load();
+    } catch (e) { show(e.message, "error"); }
   };
 
   if (loading) return <div style={{ display: "flex", justifyContent: "center", padding: 60 }}><Spinner size={32} /></div>;
@@ -5069,7 +5130,7 @@ const StudentProjectsPage = () => {
     <div className="fadeIn">
       {toastEl}
       <h1 style={{ fontSize: 24, fontWeight: 800, marginBottom: 6, color: "var(--text)" }}>My Projects</h1>
-      <p style={{ color: "var(--text2)", fontSize: 13, marginBottom: 20 }}>Projects your admin assigned to you. Submit your work link to get graded and earn XP.</p>
+      <p style={{ color: "var(--text2)", fontSize: 13, marginBottom: 20 }}>Projects your admin assigned to you. Submit a link and/or attach your work file to get graded and earn XP.</p>
       {projects.length === 0 ? <EmptyState icon="assign" title="No projects yet" desc="Your admin will assign projects here." /> : (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           {projects.map(p => {
@@ -5088,16 +5149,36 @@ const StudentProjectsPage = () => {
                   <span className="badge" style={{ background: `${sc}20`, color: sc }}>{sl}</span>
                 </div>
                 {p.description && <div style={{ fontSize: 13.5, color: "var(--text)", marginTop: 10, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{p.description}</div>}
+                {p.hasFile && (
+                  <button className="btn btn-secondary btn-sm" style={{ marginTop: 10 }}
+                    onClick={() => openStoredFile(`/projects/${p.id}/file`, p.fileName || "brief").catch(() => show("Could not open the file", "error"))}>
+                    <Ico n="assign" s={13} />View project brief{p.fileName ? `: ${p.fileName}` : ""}
+                  </button>
+                )}
                 {p.status === "graded" ? (
                   <div style={{ marginTop: 14, background: `${B.success}12`, border: `1px solid ${B.success}44`, borderRadius: 10, padding: 14 }}>
                     <div style={{ fontSize: 22, fontWeight: 900, color: B.success }}>{p.marks}/{p.maxMarks}</div>
                     <div style={{ fontSize: 13, color: "var(--text)", marginTop: 2 }}>+{p.marks} XP earned 🎉</div>
                     {p.feedback && <div style={{ fontSize: 13, color: "var(--text2)", marginTop: 8 }}><b>Feedback:</b> {p.feedback}</div>}
                     {p.link && <div style={{ fontSize: 12, marginTop: 8 }}>Your submission: <a href={p.link} target="_blank" rel="noreferrer" style={{ color: B.orange }}>{p.link}</a></div>}
+                    {p.hasSubmissionFile && <div style={{ fontSize: 12, marginTop: 6 }}><button className="btn btn-secondary btn-xs" onClick={() => openStoredFile(`/projects/${p.id}/submission-file`, p.submissionFileName || "submission").catch(() => show("Could not open", "error"))}><Ico n="download" s={12} />Your file{p.submissionFileName ? `: ${p.submissionFileName}` : ""}</button></div>}
                   </div>
                 ) : (
                   <div style={{ marginTop: 14 }}>
                     <div className="form-group"><label className="form-label">Submission link (GitHub / Drive / etc.)</label><input className="input-field" placeholder="https://..." value={linkVal} onChange={e => setI(p.id, { link: e.target.value })} /></div>
+                    <div className="form-group">
+                      <label className="form-label">Attach your work <span style={{ color: "var(--text2)", fontWeight: 500 }}>(optional — PDF/doc/zip/image, max 5MB)</span></label>
+                      {v.fileName ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 10, border: `1.5px solid ${B.success}55`, background: `${B.success}10` }}>
+                          <Ico n="check" s={16} c={B.success} />
+                          <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.fileName}</span>
+                          <button type="button" onClick={() => setI(p.id, { fileData: undefined, fileName: undefined, fileType: undefined })} style={{ background: "none", border: "none", color: B.danger, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>Remove</button>
+                        </div>
+                      ) : (
+                        <input type="file" onChange={e => onSubFile(p.id, e)} className="input-field" style={{ padding: 8 }} />
+                      )}
+                      {!v.fileName && p.hasSubmissionFile && <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 6 }}>Attached: {p.submissionFileName || "your file"} — <button className="btn-ghost" style={{ padding: 0, fontSize: 12, color: B.orange, fontWeight: 600 }} onClick={() => openStoredFile(`/projects/${p.id}/submission-file`, p.submissionFileName || "submission").catch(() => {})}>view</button>. Choose a new file to replace it.</div>}
+                    </div>
                     <div className="form-group"><label className="form-label">Note (optional)</label><textarea className="input-field" rows={2} placeholder="Anything you want your admin to know" value={noteVal} onChange={e => setI(p.id, { note: e.target.value })} style={{ resize: "vertical" }} /></div>
                     <button className="btn btn-primary" onClick={() => submit(p)}><Ico n="send" s={14} />{p.status === "submitted" ? "Re-submit" : "Submit"}</button>
                     {p.status === "submitted" && <span style={{ fontSize: 12, color: "var(--text2)", marginLeft: 10 }}>Submitted — you can update it until it's graded.</span>}

@@ -725,9 +725,10 @@ app.post('/api/enroll-requests/:id/reject', auth, adminOrSuper, (req, res) => {
 // ── PROJECTS (admin assigns → student submits → admin grades → XP) ────────────
 // Admin/super creates & assigns a project to one student OR a whole batch.
 app.post('/api/projects', auth, adminOrSuper, (req, res) => {
-  const { title, topic, description, assignType, studentId, batchId, courseId, maxMarks } = req.body;
+  const { title, topic, description, assignType, studentId, batchId, courseId, maxMarks, fileData, fileName, fileType } = req.body;
   if (!title) return res.status(400).json({ error: 'Title required' });
   if (!['student', 'batch'].includes(assignType)) return res.status(400).json({ error: 'assignType must be student or batch' });
+  if (fileData && fileData.length > 7_000_000) return res.status(413).json({ error: 'Attachment too large (max 5MB)' });
   if (!Array.isArray(DB.projects)) DB.projects = [];
   const adminRec = req.user.role === 'admin' ? getAdminRecord(req.user.id) : null;
   let sId = null, bId = null;
@@ -745,6 +746,9 @@ app.post('/api/projects', auth, adminOrSuper, (req, res) => {
     assignType, studentId: sId, batchId: bId,
     courseId: courseId ? Number(courseId) : null,
     maxMarks: Number(maxMarks) > 0 ? Number(maxMarks) : 100,
+    // Optional brief/reference file the admin attaches (stored inline so it
+    // survives on the JSON-fallback store too).
+    fileData: fileData || null, fileName: fileName || null, fileType: fileType || null,
     adminId: adminRec?.id || null, adminName: req.user.name,
     createdAt: new Date().toISOString(), submissions: [],
   };
@@ -770,9 +774,10 @@ app.get('/api/projects', auth, adminOrSuper, (req, res) => {
     const assigneeName = p.assignType === 'student' ? (recipients[0]?.name || 'Student') : (b?.name || p.batchId);
     const rows = recipients.map(s => {
       const sub = (p.submissions || []).find(x => x.studentId === s.id);
-      return { studentId: s.id, studentName: s.name, link: sub?.link || '', note: sub?.note || '', submittedAt: sub?.submittedAt || null, marks: sub?.marks ?? null, feedback: sub?.feedback || '', gradedAt: sub?.gradedAt || null };
+      return { studentId: s.id, studentName: s.name, link: sub?.link || '', note: sub?.note || '', submittedAt: sub?.submittedAt || null, marks: sub?.marks ?? null, feedback: sub?.feedback || '', gradedAt: sub?.gradedAt || null, hasSubmissionFile: !!sub?.fileData, submissionFileName: sub?.fileName || null };
     });
-    return { ...p, assigneeName, rows };
+    const { fileData, ...rest } = p; // don't ship the blob in the list
+    return { ...rest, hasFile: !!fileData, assigneeName, rows };
   }).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   res.json(out);
 });
@@ -791,6 +796,8 @@ app.get('/api/my-projects', auth, (req, res) => {
     return {
       id: p.id, title: p.title, topic: p.topic, description: p.description, maxMarks: p.maxMarks,
       adminName: p.adminName, createdAt: p.createdAt, courseTitle: course?.title || null,
+      hasFile: !!p.fileData, fileName: p.fileName || null,
+      hasSubmissionFile: !!sub?.fileData, submissionFileName: sub?.fileName || null,
       link: sub?.link || '', note: sub?.note || '', submittedAt: sub?.submittedAt || null,
       marks: sub?.marks ?? null, feedback: sub?.feedback || '', gradedAt: sub?.gradedAt || null,
       status: sub?.gradedAt ? 'graded' : sub?.submittedAt ? 'submitted' : 'assigned',
@@ -798,7 +805,41 @@ app.get('/api/my-projects', auth, (req, res) => {
   }).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)));
 });
 
-// Student submits (a link + optional note).
+// Download the project's attached brief file. Allowed for super, the owning
+// admin, or a student the project is assigned to (individually or via batch).
+app.get('/api/projects/:id/file', auth, (req, res) => {
+  const p = (DB.projects || []).find(x => x.id === req.params.id);
+  if (!p || !p.fileData) return res.status(404).json({ error: 'No attachment' });
+  let ok = false;
+  if (req.user.role === 'superadmin') ok = true;
+  else if (req.user.role === 'admin') { const a = getAdminRecord(req.user.id); ok = p.adminId === a?.id; }
+  else {
+    const s = DB.students.find(x => x.userId === req.user.id);
+    ok = !!s && ((p.assignType === 'student' && p.studentId === s.id) || (p.assignType === 'batch' && p.batchId === s.batchId));
+  }
+  if (!ok) return res.status(403).json({ error: 'Not allowed' });
+  res.json({ fileData: p.fileData, fileName: p.fileName, fileType: p.fileType });
+});
+
+// Download a student's submitted file. Allowed for super, the owning admin, or
+// the student who submitted it. studentId query selects whose submission (admins).
+app.get('/api/projects/:id/submission-file', auth, (req, res) => {
+  const p = (DB.projects || []).find(x => x.id === req.params.id);
+  if (!p) return res.status(404).json({ error: 'Project not found' });
+  let studentId = Number(req.query.studentId);
+  if (req.user.role !== 'superadmin' && req.user.role !== 'admin') {
+    const s = DB.students.find(x => x.userId === req.user.id);
+    if (!s) return res.status(403).json({ error: 'Not allowed' });
+    studentId = s.id; // students can only fetch their own
+  } else if (req.user.role === 'admin' && p.adminId !== getAdminRecord(req.user.id)?.id) {
+    return res.status(403).json({ error: 'Not your project' });
+  }
+  const sub = (p.submissions || []).find(x => x.studentId === studentId);
+  if (!sub || !sub.fileData) return res.status(404).json({ error: 'No submitted file' });
+  res.json({ fileData: sub.fileData, fileName: sub.fileName, fileType: sub.fileType });
+});
+
+// Student submits (a link and/or an attached file, + optional note).
 app.post('/api/projects/:id/submit', auth, (req, res) => {
   const student = DB.students.find(s => s.userId === req.user.id);
   if (!student) return res.status(403).json({ error: 'Students only' });
@@ -806,11 +847,14 @@ app.post('/api/projects/:id/submit', auth, (req, res) => {
   if (!p) return res.status(404).json({ error: 'Project not found' });
   const eligible = (p.assignType === 'student' && p.studentId === student.id) || (p.assignType === 'batch' && p.batchId === student.batchId);
   if (!eligible) return res.status(403).json({ error: 'Not assigned to you' });
+  const { fileData, fileName, fileType } = req.body;
+  if (fileData && fileData.length > 7_000_000) return res.status(413).json({ error: 'Attachment too large (max 5MB)' });
   if (!Array.isArray(p.submissions)) p.submissions = [];
   let sub = p.submissions.find(x => x.studentId === student.id);
   if (!sub) { sub = { studentId: student.id, studentName: student.name }; p.submissions.push(sub); }
   sub.link = String(req.body.link || '').slice(0, 500);
   sub.note = String(req.body.note || '').slice(0, 2000);
+  if (fileData) { sub.fileData = fileData; sub.fileName = fileName || 'submission'; sub.fileType = fileType || null; }
   sub.submittedAt = new Date().toISOString();
   const owner = p.adminId ? DB.admins.find(a => a.id === p.adminId) : null;
   if (owner?.userId) notify(owner.userId, 'Project submitted', `${student.name} submitted the project "${p.title}".`, 'project_submitted');
