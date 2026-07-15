@@ -60,6 +60,7 @@ let DB = {
   authorities: [],  // { id, userId, name, email, batchIds[], phone, createdAt } — read-only batch monitors
   enroll_requests: [], // { id, studentId, studentName, courseId, courseTitle, status:'pending'|'approved'|'rejected', batchId, requestedAt, decidedAt, decidedBy }
   projects: [],     // { id, title, topic, description, assignType:'student'|'batch', studentId, batchId, courseId, maxMarks, adminId, adminName, createdAt, submissions:[{ studentId, studentName, link, note, submittedAt, marks, feedback, gradedAt, xpAwarded }] }
+  group_sessions: [], // { id, hostId, hostName, courseId, topic, date, time, duration, note, createdAt, joiners:[{studentId, studentName}] } — student-run group study sessions
 };
 
 function loadDB() {
@@ -1880,6 +1881,102 @@ app.delete('/api/study-plan/:id', auth, (req, res) => {
   const sidx = DB.students.findIndex(s => s.userId === req.user.id);
   if (sidx < 0) return res.status(404).json({ error: 'Not found' });
   DB.students[sidx].studyPlan = (DB.students[sidx].studyPlan || []).filter(p => p.id !== req.params.id);
+  saveDB();
+  res.json({ ok: true });
+});
+
+// ── GROUP STUDY SESSIONS (students organise; coursemates can join) ─────────────
+function shapeGroupSession(g, me) {
+  const course = g.courseId ? DB.courses.find(c => c.id === g.courseId) : null;
+  const joiners = g.joiners || [];
+  return {
+    id: g.id, hostId: g.hostId, hostName: g.hostName, courseId: g.courseId,
+    courseTitle: course?.title || null, topic: g.topic, date: g.date, time: g.time || '',
+    duration: g.duration || 60, note: g.note || '', createdAt: g.createdAt,
+    joiners, joinerCount: joiners.length,
+    isHost: !!me && g.hostId === me.id,
+    joined: !!me && joiners.some(j => j.studentId === me.id),
+  };
+}
+// List sessions visible to me: any session for a course I'm enrolled in, plus
+// sessions I host. Upcoming first.
+app.get('/api/group-sessions', auth, (req, res) => {
+  const me = DB.students.find(s => s.userId === req.user.id);
+  if (!me) return res.json([]);
+  const myCourseIds = DB.enrollments.filter(e => e.studentId === me.id).map(e => e.courseId);
+  const list = (DB.group_sessions || []).filter(g =>
+    g.hostId === me.id || (g.courseId && myCourseIds.includes(g.courseId)) || !g.courseId);
+  const today = new Date().toISOString().split('T')[0];
+  const out = list.map(g => shapeGroupSession(g, me))
+    .sort((a, b) => (a.date === b.date ? (a.time || '').localeCompare(b.time || '') : a.date.localeCompare(b.date)));
+  // upcoming (>= today) first in date order, then past in reverse
+  const upcoming = out.filter(g => g.date >= today);
+  const past = out.filter(g => g.date < today).reverse();
+  res.json([...upcoming, ...past]);
+});
+app.post('/api/group-sessions', auth, (req, res) => {
+  const me = DB.students.find(s => s.userId === req.user.id);
+  if (!me) return res.status(403).json({ error: 'Students only' });
+  const { courseId, topic, date, time, duration, note } = req.body;
+  if (!topic || !String(topic).trim()) return res.status(400).json({ error: 'Topic is required' });
+  if (!date) return res.status(400).json({ error: 'Date is required' });
+  if (courseId && !DB.enrollments.some(e => e.studentId === me.id && e.courseId === Number(courseId)))
+    return res.status(403).json({ error: 'You are not enrolled in that course' });
+  if (!Array.isArray(DB.group_sessions)) DB.group_sessions = [];
+  const g = {
+    id: uuidv4(), hostId: me.id, hostName: me.name,
+    courseId: courseId ? Number(courseId) : null,
+    topic: String(topic).slice(0, 200), date, time: time || '',
+    duration: Number(duration) > 0 ? Number(duration) : 60,
+    note: String(note || '').slice(0, 500),
+    createdAt: new Date().toISOString(),
+    joiners: [{ studentId: me.id, studentName: me.name }], // host auto-joins
+  };
+  DB.group_sessions.push(g);
+  // Notify coursemates enrolled in the same course.
+  if (g.courseId) {
+    const mates = DB.enrollments.filter(e => e.courseId === g.courseId && e.studentId !== me.id).map(e => e.studentId);
+    [...new Set(mates)].forEach(sid => {
+      const s = DB.students.find(x => x.id === sid);
+      if (s?.userId) notify(s.userId, 'Group study session 👥', `${me.name} is studying "${g.topic}" on ${g.date}${g.time ? ' at ' + g.time : ''}. Join from Study Planner.`, 'group_session');
+    });
+  }
+  saveDB();
+  res.status(201).json(shapeGroupSession(g, me));
+});
+app.post('/api/group-sessions/:id/join', auth, (req, res) => {
+  const me = DB.students.find(s => s.userId === req.user.id);
+  if (!me) return res.status(403).json({ error: 'Students only' });
+  const g = (DB.group_sessions || []).find(x => x.id === req.params.id);
+  if (!g) return res.status(404).json({ error: 'Not found' });
+  const myCourseIds = DB.enrollments.filter(e => e.studentId === me.id).map(e => e.courseId);
+  if (g.courseId && !myCourseIds.includes(g.courseId)) return res.status(403).json({ error: 'Not your course' });
+  if (!Array.isArray(g.joiners)) g.joiners = [];
+  if (!g.joiners.some(j => j.studentId === me.id)) {
+    g.joiners.push({ studentId: me.id, studentName: me.name });
+    const host = DB.students.find(s => s.id === g.hostId);
+    if (host?.userId && host.id !== me.id) notify(host.userId, 'Someone joined your study session ✅', `${me.name} joined your "${g.topic}" session.`, 'group_session');
+    saveDB();
+  }
+  res.json(shapeGroupSession(g, me));
+});
+app.post('/api/group-sessions/:id/leave', auth, (req, res) => {
+  const me = DB.students.find(s => s.userId === req.user.id);
+  if (!me) return res.status(403).json({ error: 'Students only' });
+  const g = (DB.group_sessions || []).find(x => x.id === req.params.id);
+  if (!g) return res.status(404).json({ error: 'Not found' });
+  g.joiners = (g.joiners || []).filter(j => j.studentId !== me.id);
+  saveDB();
+  res.json(shapeGroupSession(g, me));
+});
+app.delete('/api/group-sessions/:id', auth, (req, res) => {
+  const g = (DB.group_sessions || []).find(x => x.id === req.params.id);
+  if (!g) return res.status(404).json({ error: 'Not found' });
+  const me = DB.students.find(s => s.userId === req.user.id);
+  const isHost = me && g.hostId === me.id;
+  const isStaff = req.user.role === 'admin' || req.user.role === 'superadmin';
+  if (!isHost && !isStaff) return res.status(403).json({ error: 'Only the host can remove this' });
+  DB.group_sessions = (DB.group_sessions || []).filter(x => x.id !== req.params.id);
   saveDB();
   res.json({ ok: true });
 });

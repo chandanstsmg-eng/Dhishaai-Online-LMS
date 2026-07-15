@@ -4606,12 +4606,37 @@ const StudyPlannerPage = () => {
   const [loading, setLoading] = useState(false);
   const [show, toastEl] = useToast();
 
+  const today = new Date().toISOString().split("T")[0];
+  // Group study sessions (coursemates organise + join).
+  const [groupSessions, setGroupSessions] = useState([]);
+  const [showGroup, setShowGroup] = useState(false);
+  const blankGroup = { courseId: "", topic: "", date: today, time: "", duration: 60, note: "" };
+  const [gForm, setGForm] = useState(blankGroup);
+  const loadGroups = () => GET("/group-sessions").then(setGroupSessions).catch(() => {});
+
   useEffect(() => {
     GET("/study-plan").then(setPlan).catch(() => {});
     GET("/courses").then(setCourses).catch(() => {});
+    loadGroups();
   }, []);
 
-  const today = new Date().toISOString().split("T")[0];
+  const addGroup = async () => {
+    if (!gForm.topic.trim()) { show("Say what you'll study", "error"); return; }
+    try {
+      await POST("/group-sessions", gForm);
+      show("Posted — your coursemates can now join! 👥");
+      setGForm(blankGroup); setShowGroup(false); loadGroups();
+    } catch (e) { show(e.message, "error"); }
+  };
+  const toggleJoin = async (g) => {
+    try { await POST(`/group-sessions/${g.id}/${g.joined ? "leave" : "join"}`, {}); loadGroups(); }
+    catch (e) { show(e.message, "error"); }
+  };
+  const delGroup = async (g) => {
+    if (!confirm("Remove this group session?")) return;
+    try { await DELETE(`/group-sessions/${g.id}`); loadGroups(); }
+    catch (e) { show(e.message, "error"); }
+  };
   const todayItems = plan.filter(p => p.date === today);
   const upcomingItems = plan.filter(p => p.date > today);
   const pastItems = plan.filter(p => p.date < today).sort((a,b) => b.date.localeCompare(a.date));
@@ -4742,11 +4767,81 @@ const StudyPlannerPage = () => {
 
       {/* Past */}
       {pastItems.length > 0 && (
-        <div>
+        <div style={{ marginBottom: 24 }}>
           <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12, color: "var(--text)" }}>🕒 Past Sessions</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{pastItems.slice(0,5).map(item => <PlanItem key={item.id} item={item} />)}</div>
         </div>
       )}
+
+      {/* ── GROUP STUDY (coursemates organise + join) ── */}
+      <div className="card-flat" style={{ padding: "clamp(16px,3vw,22px)", marginTop: 8, border: `1.5px solid ${B.orange}33` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: 16, color: "var(--text)", display: "flex", alignItems: "center", gap: 8 }}>👥 Group Study</div>
+            <div style={{ fontSize: 12.5, color: "var(--text2)", marginTop: 2 }}>Post what you're studying and when — coursemates can join and learn together.</div>
+          </div>
+          <button className="btn btn-primary btn-sm" onClick={() => setShowGroup(v => !v)}><Ico n="plus" s={14} />Post a session</button>
+        </div>
+
+        {showGroup && (
+          <div style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 12, padding: 16, margin: "14px 0" }}>
+            <div className="form-group"><label className="form-label">What will you study?</label><input className="input-field" placeholder="e.g. Module 2 — SQL JOINs practice together" value={gForm.topic} onChange={e => setGForm(f => ({ ...f, topic: e.target.value }))} /></div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+              <div className="form-group"><label className="form-label">Date</label><input type="date" className="input-field" value={gForm.date} min={today} onChange={e => setGForm(f => ({ ...f, date: e.target.value }))} /></div>
+              <div className="form-group"><label className="form-label">Time</label><input type="time" className="input-field" value={gForm.time} onChange={e => setGForm(f => ({ ...f, time: e.target.value }))} /></div>
+              <div className="form-group"><label className="form-label">Duration</label>
+                <select className="input-field" value={gForm.duration} onChange={e => setGForm(f => ({ ...f, duration: parseInt(e.target.value) }))}>
+                  {[30, 45, 60, 90, 120].map(d => <option key={d} value={d}>{d} min</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="form-group"><label className="form-label">Course <span style={{ color: "var(--text2)", fontWeight: 500 }}>(so the right coursemates see it)</span></label>
+              <select className="input-field" value={gForm.courseId} onChange={e => setGForm(f => ({ ...f, courseId: e.target.value }))}>
+                <option value="">— Any of my coursemates —</option>
+                {courses.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+              </select>
+            </div>
+            <div className="form-group"><label className="form-label">Note (optional)</label><input className="input-field" placeholder="Where / how — e.g. on Google Meet, library, etc." value={gForm.note} onChange={e => setGForm(f => ({ ...f, note: e.target.value }))} /></div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-primary btn-sm" onClick={addGroup}><Ico n="plus" s={14} />Post session</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => { setShowGroup(false); setGForm(blankGroup); }}>Cancel</button>
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 14 }}>
+          {groupSessions.length === 0 ? (
+            <div style={{ padding: 20, textAlign: "center", color: "var(--text2)", fontSize: 13.5, background: "var(--surface2)", borderRadius: 10 }}>No group sessions yet. Be the first — <button style={{ color: B.orange, background: "none", border: "none", cursor: "pointer", fontWeight: 700 }} onClick={() => setShowGroup(true)}>post one →</button></div>
+          ) : groupSessions.map(g => {
+            const isPast = g.date < today;
+            return (
+              <div key={g.id} style={{ border: `1.5px solid ${g.joined ? B.success : "var(--border)"}`, background: g.joined ? `${B.success}08` : "var(--surface)", borderRadius: 12, padding: "14px 16px", opacity: isPast ? 0.6 : 1 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14.5, color: "var(--text)" }}>{g.topic}</div>
+                    <div style={{ fontSize: 12.5, color: "var(--text2)", marginTop: 3, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                      <span>👤 {g.hostName}{g.isHost ? " (you)" : ""}</span>
+                      <span>📅 {g.date}{g.time ? ` · ${g.time}` : ""}</span>
+                      <span>⏱ {g.duration} min</span>
+                      {g.courseTitle && <span>📘 {g.courseTitle}</span>}
+                    </div>
+                    {g.note && <div style={{ fontSize: 12.5, color: "var(--text2)", marginTop: 5 }}>📝 {g.note}</div>}
+                    <div style={{ fontSize: 12, color: g.joinerCount > 1 ? B.success : "var(--text2)", marginTop: 6, fontWeight: 600 }}>
+                      {g.joinerCount} joined{g.joiners?.length ? `: ${g.joiners.map(j => j.studentName).join(", ")}` : ""}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                    {!isPast && (g.isHost
+                      ? <span className="badge badge-orange" style={{ alignSelf: "center" }}>Your session</span>
+                      : <button className={`btn btn-sm ${g.joined ? "btn-secondary" : "btn-primary"}`} onClick={() => toggleJoin(g)}>{g.joined ? "Leave" : "Join"}</button>)}
+                    {(g.isHost) && <button className="btn btn-danger btn-xs" onClick={() => delGroup(g)}><Ico n="trash" s={12} /></button>}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 };
