@@ -1895,7 +1895,7 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
             </div>
           </div>
           <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 14, lineHeight: 1.6 }}>
-            Then attach content: <b>Study Materials → Upload</b> (choose this course &amp; module) for the PDF, and <b>Quizzes → Create Quiz</b> (choose this course &amp; module) for its MCQs. Both menus list these modules.
+            Then attach content: <b>Study Materials → Upload</b> (choose this course &amp; module) for the PDF, and <b>Quizzes → Create Quiz</b> (choose this course &amp; module) for its MCQs. Both menus list these modules. <b>Upload several PDFs to the same module</b> and they appear to students as numbered <b>sub-modules</b> (1.1, 1.2 …) inside that module.
           </div>
         </Modal>
       )}
@@ -2775,7 +2775,7 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 800, fontSize: 15, color: "var(--text)" }}>{m.title}</div>
-                      <div style={{ fontSize: 12, color: "var(--text2)" }}>{m.topics.length} topics{m.quiz ? " · 1 quiz" : ""}</div>
+                      <div style={{ fontSize: 12, color: "var(--text2)" }}>{m.topics.length} topics{modMats.length ? ` · ${modMats.length} sub-module${modMats.length > 1 ? "s" : ""}` : ""}{m.quiz ? " · 1 quiz" : ""}</div>
                     </div>
                     {complete ? <span className="badge badge-green">Completed ✓</span>
                       : !unlocked ? <span className="badge badge-navy">{selected.manualRelease ? "Not released yet" : "Locked"}</span>
@@ -2806,22 +2806,30 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
                               </div>}
                       </div>
 
-                      {/* Study material (PDF) — View sits directly above the quiz */}
-                      {modMats.map(mat => {
-                        const read = materialRead(mat.id);
-                        return (
-                          <div key={mat.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 10, border: `1.5px solid ${read ? B.success : B.navy}33`, background: `${read ? B.success : B.navy}08` }}>
-                            <div style={{ width: 34, height: 34, borderRadius: 9, background: `${read ? B.success : B.navy}18`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                              <Ico n={read ? "check" : "book"} s={17} c={read ? B.success : B.navy} />
-                            </div>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)" }}>{mat.title}</div>
-                              <div style={{ fontSize: 12, color: read ? B.success : "var(--text2)", fontWeight: read ? 700 : 400 }}>{read ? "✓ Read to the end" : "📄 Open and read to the last page"}</div>
-                            </div>
-                            <button className="btn btn-primary btn-sm" onClick={() => setViewer(mat)}><Ico n="play" s={13} />{read ? "Review" : "View"}</button>
+                      {/* Sub-modules — each attached PDF is a sub-unit of this module.
+                          Sits directly above the quiz. */}
+                      {modMats.length > 0 && (
+                        <div style={{ border: "1px solid var(--border)", borderRadius: 10, background: "var(--surface)", overflow: "hidden" }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text2)", letterSpacing: .5, textTransform: "uppercase", padding: "10px 14px", borderBottom: "1px solid var(--border)", background: "var(--surface2)" }}>
+                            {modMats.length > 1 ? `Sub-modules (${modMats.length})` : "Study material"}
                           </div>
-                        );
-                      })}
+                          {modMats.map((mat, si) => {
+                            const read = materialRead(mat.id);
+                            return (
+                              <div key={mat.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderTop: si ? "1px solid var(--border)" : "none", background: read ? `${B.success}0d` : "transparent" }}>
+                                <div style={{ minWidth: 40, height: 30, padding: "0 8px", borderRadius: 8, background: read ? `${B.success}18` : `${B.navy}12`, color: read ? B.success : B.navy, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontWeight: 800, fontSize: 12.5 }}>
+                                  {read ? <Ico n="check" s={15} c={B.success} /> : `${m.index + 1}.${si + 1}`}
+                                </div>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)" }}>{mat.title}</div>
+                                  <div style={{ fontSize: 12, color: read ? B.success : "var(--text2)", fontWeight: read ? 700 : 400 }}>{read ? "✓ Read to the end" : "📄 PDF · read to the last page"}</div>
+                                </div>
+                                <button className="btn btn-primary btn-sm" onClick={() => setViewer(mat)}><Ico n="play" s={13} />{read ? "Review" : "View"}</button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
 
                       {/* Module quiz gate — right below the View option */}
                       {m.quiz && (
