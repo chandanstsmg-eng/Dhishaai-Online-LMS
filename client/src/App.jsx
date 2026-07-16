@@ -4842,6 +4842,87 @@ const AuthorityPage = () => {
 };
 
 // ─── STUDY PLANNER ─────────────────────────────────────────────────────────────
+// ── Transparent live-narration capture for online sessions ──────────────────────
+// Transcribes ONLY the current student's own speech (browser Web Speech API) and
+// posts it so their admin can review the session afterwards. A visible red banner is
+// always shown and the student starts/stops it themselves — nothing is hidden.
+const LiveTranscriber = ({ session }) => {
+  const SR = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+  const [on, setOn] = useState(false);
+  const [status, setStatus] = useState("");
+  const [lines, setLines] = useState(0);
+  const recRef = useRef(null);      // holds the recognition instance while ON (null = stop)
+  const bufRef = useRef("");        // final phrases waiting to be sent
+  const timerRef = useRef(null);
+
+  const flush = async () => {
+    const text = bufRef.current.trim();
+    bufRef.current = "";
+    if (!text) return;
+    try { const r = await POST(`/group-sessions/${session.id}/transcript`, { text }); if (r?.count) setLines(r.count); }
+    catch { /* keep listening; retry on next chunk */ }
+  };
+
+  const start = () => {
+    if (!SR) return;
+    const rec = new SR();
+    rec.continuous = true; rec.interimResults = false; rec.lang = "en-US";
+    rec.onresult = (ev) => {
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        if (ev.results[i].isFinal) {
+          const t = ev.results[i][0].transcript.trim();
+          if (t) bufRef.current += (bufRef.current ? " " : "") + t;
+        }
+      }
+    };
+    rec.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") setStatus("Microphone blocked — allow mic access to record.");
+      else if (e.error === "no-speech") setStatus("Listening… (no speech yet)");
+    };
+    rec.onend = () => { if (recRef.current) { try { rec.start(); } catch { /* already starting */ } } }; // auto-restart while ON
+    recRef.current = rec;
+    try { rec.start(); setOn(true); setStatus("Listening…"); }
+    catch { setStatus("Couldn't start the microphone."); }
+    timerRef.current = setInterval(flush, 5000);
+  };
+
+  const stop = () => {
+    const rec = recRef.current;
+    recRef.current = null; // signals onend not to restart
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    try { rec && rec.stop(); } catch {}
+    flush();
+    setOn(false); setStatus("");
+  };
+
+  useEffect(() => () => { recRef.current = null; if (timerRef.current) clearInterval(timerRef.current); try { /* stop mic on unmount */ } catch {} }, []);
+
+  const dot = (
+    <span style={{ width: 9, height: 9, borderRadius: "50%", background: B.danger, display: "inline-block", animation: on ? "pulse 1.2s ease-in-out infinite" : "none" }} />
+  );
+
+  if (!SR) return (
+    <div style={{ marginTop: 10, border: `1px solid ${B.danger}55`, background: `${B.danger}0d`, borderRadius: 10, padding: "10px 12px", fontSize: 12, color: "var(--text2)", display: "flex", alignItems: "center", gap: 8 }}>
+      {dot}<span><b style={{ color: B.danger }}>This session is recorded for admin review.</b> Live narration capture needs Chrome or Edge on a computer.</span>
+    </div>
+  );
+
+  return (
+    <div style={{ marginTop: 10, border: `1px solid ${B.danger}55`, background: `${B.danger}0d`, borderRadius: 10, padding: "10px 12px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 700, color: B.danger, fontSize: 12.5 }}>
+          {dot}{on ? "Recording your narration" : "Recording for admin review"}
+        </span>
+        <span style={{ fontSize: 11.5, color: "var(--text2)" }}>Your spoken narration is saved so your admin can review this session.</span>
+        <button className={`btn btn-xs ${on ? "btn-danger" : "btn-secondary"}`} style={{ marginLeft: "auto" }} onClick={() => (on ? stop() : start())}>
+          {on ? "■ Stop recording" : "● Start recording"}
+        </button>
+      </div>
+      {status && <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 6 }}>{status}{on && lines ? ` · ${lines} lines saved` : ""}</div>}
+    </div>
+  );
+};
+
 const StudyPlannerPage = () => {
   const [plan, setPlan] = useState([]);
   const [courses, setCourses] = useState([]);
@@ -5094,6 +5175,8 @@ const StudyPlannerPage = () => {
                     {g.status === "approved" && !g.videoLink && !g.isHost && !g.joined && (
                       <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 8 }}>Join to get the Meet link.</div>
                     )}
+                    {/* Live narration capture — shown once you're in the session (host or joined) */}
+                    {g.status === "approved" && !isPast && (g.isHost || g.joined) && <LiveTranscriber session={g} />}
                     {/* Recording */}
                     {g.recordingLink
                       ? <div style={{ marginTop: 8 }}><a href={g.recordingLink} target="_blank" rel="noreferrer" style={{ color: B.orange, fontSize: 12.5, fontWeight: 600 }}>▶ Watch recording</a></div>
@@ -5704,9 +5787,16 @@ const StudentProjectsPage = () => {
 const AdminSessionsPage = () => {
   const [sessions, setSessions] = useState([]);
   const [linkInput, setLinkInput] = useState({}); // sessionId -> meet link being typed
+  const [review, setReview] = useState(null); // { g, loading, data } — transcript review modal
   const [show, toastEl] = useToast();
   const load = () => GET("/group-sessions/manage").then(setSessions).catch(() => {});
   useEffect(() => { load(); }, []);
+
+  const openReview = async (g) => {
+    setReview({ g, loading: true, data: null });
+    try { const data = await GET(`/group-sessions/${g.id}/transcript`); setReview({ g, loading: false, data }); }
+    catch (e) { show(e.message, "error"); setReview(null); }
+  };
 
   const approve = async (g) => {
     const link = (linkInput[g.id] ?? g.videoLink ?? "").trim();
@@ -5737,7 +5827,12 @@ const AdminSessionsPage = () => {
             {g.status === "approved" && g.videoLink && <div style={{ fontSize: 12.5, marginTop: 6 }}>🎥 <a href={g.videoLink} target="_blank" rel="noreferrer" style={{ color: B.orange }}>{g.videoLink}</a> · {g.joinerCount} joined</div>}
             {g.recordingLink && <div style={{ fontSize: 12.5, marginTop: 4 }}>▶ <a href={g.recordingLink} target="_blank" rel="noreferrer" style={{ color: B.orange }}>Recording</a></div>}
           </div>
-          <button className="btn btn-danger btn-xs" onClick={() => del(g)}><Ico n="trash" s={12} /></button>
+          <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
+            <button className="btn btn-secondary btn-xs" onClick={() => openReview(g)} title="Review what students said in this session">
+              📝 Review transcript{g.transcriptCount ? ` (${g.transcriptCount})` : ""}
+            </button>
+            <button className="btn btn-danger btn-xs" onClick={() => del(g)}><Ico n="trash" s={12} /></button>
+          </div>
         </div>
         {g.status === "pending" && (
           <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -5772,6 +5867,52 @@ const AdminSessionsPage = () => {
             </div>
           )}
         </>
+      )}
+
+      {review && (
+        <div className="modal-overlay" onClick={() => setReview(null)}>
+          <div className="modal" style={{ maxWidth: 720, width: "94%", maxHeight: "88vh", display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <h2 className="modal-title">📝 Session transcript</h2>
+                <p style={{ color: "var(--text2)", fontSize: 12.5, margin: "2px 0 0" }}>
+                  {review.g.topic}{review.g.courseTitle ? ` · ${review.g.courseTitle}` : ""} · hosted by {review.g.hostName}
+                </p>
+              </div>
+              <button className="btn btn-secondary btn-sm" onClick={() => setReview(null)}><Ico n="x" s={16} /></button>
+            </div>
+            <div style={{ overflowY: "auto", padding: "4px 2px" }}>
+              {review.loading ? (
+                <div style={{ padding: 30, textAlign: "center", color: "var(--text2)" }}>Loading transcript…</div>
+              ) : !review.data || (review.data.entries || []).length === 0 ? (
+                <EmptyState icon="forum" title="No transcript yet" desc="Nothing was recorded for this session. Students record their narration from the Study Planner during the live session." />
+              ) : (
+                <>
+                  {/* Per-student summary */}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+                    {review.data.speakers.map(s => (
+                      <span key={s.studentId} className="badge" style={{ background: "var(--surface2)", color: "var(--text)", border: "1px solid var(--border)", fontSize: 12 }}>
+                        👤 {s.studentName} · {s.lines} lines · {s.words} words
+                      </span>
+                    ))}
+                  </div>
+                  {/* Chronological transcript */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {review.data.entries.map(e => (
+                      <div key={e.id} style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 10, padding: "9px 12px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 3 }}>
+                          <span style={{ fontWeight: 700, fontSize: 12.5, color: B.orange }}>{e.studentName}</span>
+                          <span style={{ fontSize: 11, color: "var(--text2)" }}>{new Date(e.at).toLocaleString()}</span>
+                        </div>
+                        <div style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.5 }}>{e.text}</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

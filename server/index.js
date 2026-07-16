@@ -1978,6 +1978,7 @@ function shapeGroupSession(g, me, full) {
     recordingLink: g.recordingLink || '',
     createdAt: g.createdAt, joiners, joinerCount: joiners.length,
     isHost, joined,
+    transcriptCount: (g.transcripts || []).length,
   };
 }
 // Student view: my own requests (any status) + APPROVED sessions on my courses.
@@ -2071,6 +2072,54 @@ app.post('/api/group-sessions/:id/recording', auth, (req, res) => {
   g.recordingLink = String(req.body.recordingLink || '').trim().slice(0, 500);
   saveDB();
   res.json(shapeGroupSession(g, me, true));
+});
+// ── LIVE SESSION TRANSCRIPT (transparent per-student narration capture) ───────
+// NOT covert: every participant sees a visible "recording" banner and starts it
+// themselves. Each student's browser transcribes ONLY their own speech (Web Speech
+// API) and posts chunks here, tagged with their name + timestamp. The course
+// admin/moderator (and the host) later reviews the full transcript to see who said
+// what. We refuse to build a version hidden from students — that would be unlawful.
+app.post('/api/group-sessions/:id/transcript', auth, (req, res) => {
+  const g = (DB.group_sessions || []).find(x => x.id === req.params.id);
+  if (!g) return res.status(404).json({ error: 'Not found' });
+  const me = DB.students.find(s => s.userId === req.user.id);
+  if (!me) return res.status(403).json({ error: 'Students only' });
+  const isHost = g.hostId === me.id;
+  const joined = (g.joiners || []).some(j => j.studentId === me.id);
+  if (!isHost && !joined) return res.status(403).json({ error: 'Join the session first' });
+  if (g.status !== 'approved') return res.status(400).json({ error: 'This session is not live' });
+  const text = String(req.body.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'Empty transcript' });
+  if (!Array.isArray(g.transcripts)) g.transcripts = [];
+  g.transcripts.push({
+    id: uuidv4(), studentId: me.id, studentName: me.name,
+    text: text.slice(0, 2000), at: new Date().toISOString(),
+  });
+  // Keep the most recent 5000 lines so a long session can't grow the DB unbounded.
+  if (g.transcripts.length > 5000) g.transcripts = g.transcripts.slice(-5000);
+  saveDB();
+  res.json({ ok: true, count: g.transcripts.length });
+});
+// Admin/moderator (or the host) reads the full per-student transcript for review.
+app.get('/api/group-sessions/:id/transcript', auth, (req, res) => {
+  const g = (DB.group_sessions || []).find(x => x.id === req.params.id);
+  if (!g) return res.status(404).json({ error: 'Not found' });
+  const me = DB.students.find(s => s.userId === req.user.id);
+  const isHost = me && g.hostId === me.id;
+  if (!isHost && !canModerateSession(req, g)) return res.status(403).json({ error: 'Not allowed' });
+  const entries = (g.transcripts || []).slice().sort((a, b) => (a.at < b.at ? -1 : 1));
+  const byStudent = {};
+  entries.forEach(e => {
+    const k = e.studentId;
+    if (!byStudent[k]) byStudent[k] = { studentId: e.studentId, studentName: e.studentName, lines: 0, words: 0 };
+    byStudent[k].lines += 1;
+    byStudent[k].words += String(e.text).split(/\s+/).filter(Boolean).length;
+  });
+  res.json({
+    topic: g.topic, hostName: g.hostName, date: g.date, time: g.time || '',
+    courseTitle: g.courseId ? (DB.courses.find(c => c.id === g.courseId)?.title || null) : null,
+    entries, speakers: Object.values(byStudent).sort((a, b) => b.lines - a.lines),
+  });
 });
 app.post('/api/group-sessions/:id/join', auth, (req, res) => {
   const me = DB.students.find(s => s.userId === req.user.id);
