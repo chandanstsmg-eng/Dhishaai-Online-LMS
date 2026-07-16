@@ -1719,14 +1719,15 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
   useEffect(() => { load(); if (isSuper) { GET("/super/admins").then(setAdmins).catch(() => {}); GET("/batches").then(setBatches).catch(() => {}); } }, []);
   const adminName = id => admins.find(a => a.id === id)?.name || "Unassigned";
 
-  const openAdd = () => { setForm({ title: "", category: "Python", lessons: 0, duration: "", description: "", color: "#4F46E5", ownerId: "" }); setModal("add"); };
-  const openEdit = c => { setForm({ ...c, ownerId: c.ownerId || "" }); setModal(c); };
+  const openAdd = () => { setForm({ title: "", category: "Python", lessons: 0, duration: "", description: "", color: "#4F46E5", ownerId: "", ownerBatchId: "" }); setModal("add"); };
+  const openEdit = c => { setForm({ ...c, ownerId: c.ownerId || "", ownerBatchId: c.ownerBatchId || "" }); setModal(c); };
 
   const save = async () => {
     if (!form.title.trim()) { show("Enter a course title", "error"); return; }
     try {
       const payload = { ...form };
-      if (isSuper) payload.ownerId = form.ownerId || null; else delete payload.ownerId;
+      if (isSuper) { payload.ownerId = form.ownerId || null; payload.ownerBatchId = form.ownerBatchId || null; }
+      else { delete payload.ownerId; delete payload.ownerBatchId; }
       if (modal === "add") await POST("/courses", payload);
       else await PUT(`/courses/${modal.id}`, payload);
       show("Course saved!"); setModal(null); load(); onCourseChange?.();
@@ -2050,6 +2051,16 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
                 })}
               </select>
               <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 6 }}>This admin manages the course and sees its students. Assign as many courses as you like to the same admin.</div>
+            </div>
+          )}
+          {isSuper && form.ownerId && (
+            <div className="form-group">
+              <label className="form-label">Restrict to Batch <span style={{ color: "var(--text2)", fontWeight: 500 }}>(optional)</span></label>
+              <select className="input-field" value={form.ownerBatchId || ""} onChange={e => setForm({ ...form, ownerBatchId: e.target.value })}>
+                <option value="">All batches — admin sees every enrolled student</option>
+                {batches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+              <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 6 }}>Pick a batch to limit this admin to only that batch's students for this course.</div>
             </div>
           )}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>

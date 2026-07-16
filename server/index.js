@@ -970,8 +970,9 @@ app.post('/api/courses', auth, adminOrSuper, (req, res) => {
     ownerId = req.body.ownerId; // superadmin can assign to any admin
   }
 
+  const ownerBatchId = (req.user.role === 'superadmin' && req.body.ownerBatchId) ? req.body.ownerBatchId : null;
   const id = (DB.courses.length > 0 ? Math.max(...DB.courses.map(c=>c.id)) : 0) + 1;
-  const course = { id, ownerId, title, category: category||'General', lessons: lessons||0, duration: duration||'', description: description||'', color: color||'#4F46E5', syllabusUnlocked: false, quizEnabled: false, modules: [], createdAt: new Date().toISOString() };
+  const course = { id, ownerId, ownerBatchId, title, category: category||'General', lessons: lessons||0, duration: duration||'', description: description||'', color: color||'#4F46E5', syllabusUnlocked: false, quizEnabled: false, modules: [], createdAt: new Date().toISOString() };
   DB.courses.push(course);
   saveDB();
   res.status(201).json(course);
