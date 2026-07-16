@@ -965,13 +965,17 @@ app.put('/api/courses/:id', auth, adminOrSuper, (req, res) => {
   const idx = DB.courses.findIndex(c => c.id === id);
   if (idx < 0) return res.status(404).json({ error: 'Not found' });
 
-  // Admin can only edit their own courses
+  const body = { ...req.body };
+  // Admin can only edit their own courses — and can NEVER change ownership.
   if (req.user.role === 'admin') {
     const adminRec = getAdminRecord(req.user.id);
     if (DB.courses[idx].ownerId !== adminRec?.id) return res.status(403).json({ error: 'Not your course' });
+    delete body.ownerId; // only the superadmin can reassign a course to another admin
+  } else if ('ownerId' in body) {
+    body.ownerId = body.ownerId || null; // superadmin: "" → unassigned
   }
 
-  DB.courses[idx] = { ...DB.courses[idx], ...req.body, id };
+  DB.courses[idx] = { ...DB.courses[idx], ...body, id };
   saveDB();
   res.json(DB.courses[idx]);
 });

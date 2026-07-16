@@ -1736,6 +1736,14 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
     try { await PUT(`/courses/${course.id}`, { ...course, [field]: !course[field] }); load(); onCourseChange?.(); }
     catch (e) { show(e.message, "error"); }
   };
+  // Superadmin: shift a course to a different admin at any time.
+  const reassignOwner = async (course, ownerId) => {
+    try {
+      await PUT(`/courses/${course.id}`, { ownerId: ownerId || null });
+      show(ownerId ? `Course moved to ${adminName(ownerId)}` : "Course unassigned");
+      load(); onCourseChange?.();
+    } catch (e) { show(e.message, "error"); }
+  };
 
   const del = async id => {
     if (!confirm("Delete this course?")) return;
@@ -1843,6 +1851,15 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
                   <span style={{ fontSize: 13, color: "var(--text2)" }}>Quiz Enabled</span>
                   <Toggle checked={c.quizEnabled} onChange={() => toggle(c, "quizEnabled")} />
                 </div>
+                {isSuper && (
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 13, color: "var(--text2)" }}>Owner (admin)</span>
+                    <select className="input-field" value={c.ownerId || ""} onChange={e => reassignOwner(c, e.target.value)} style={{ width: "auto", minWidth: 140, maxWidth: 170, padding: "6px 10px", fontSize: 13 }} title="Shift this course to another admin">
+                      <option value="">— Unassigned —</option>
+                      {admins.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  </div>
+                )}
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 <button className="btn btn-outline btn-sm" style={{ justifyContent: "center" }} onClick={() => openModules(c)}><Ico n="book" s={14} />Manage Modules ({(c.modules || []).length})</button>
