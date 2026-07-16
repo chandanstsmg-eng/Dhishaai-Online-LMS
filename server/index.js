@@ -35,8 +35,27 @@ const DB_PATH    = path.join(__dirname, 'dhishaai_lms.json');
 const CLIENT_DIST = path.join(__dirname, '../client/dist');
 
 app.use(cors({ origin: '*', credentials: true }));
-app.use(express.json({ limit: '20mb' }));
-app.use(express.urlencoded({ limit: '20mb', extended: true }));
+app.use(express.json({ limit: '80mb' }));   // large enough for gallery video uploads (base64)
+app.use(express.urlencoded({ limit: '80mb', extended: true }));
+
+// Uploaded video files live on disk (streamed with range support) instead of in
+// the DB. Served statically so seeking works and it plays inside the platform.
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+const VIDEO_DIR = path.join(UPLOADS_DIR, 'videos');
+try { fs.mkdirSync(VIDEO_DIR, { recursive: true }); } catch {}
+app.use('/uploads', express.static(UPLOADS_DIR, { maxAge: '7d' }));
+function saveVideoFile(id, dataUrl) {
+  const m = /^data:(.*?);base64,([\s\S]*)$/.exec(dataUrl || '');
+  if (!m) return null;
+  const mime = (m[1] || 'video/mp4').toLowerCase();
+  const ext = mime.includes('webm') ? 'webm' : mime.includes('ogg') ? 'ogv' : (mime.includes('quicktime') || mime.includes('mov')) ? 'mov' : 'mp4';
+  try { fs.writeFileSync(path.join(VIDEO_DIR, `${id}.${ext}`), Buffer.from(m[2], 'base64')); return `/uploads/videos/${id}.${ext}`; }
+  catch (e) { console.error('video save failed:', e.message); return null; }
+}
+function deleteVideoFile(url) {
+  if (!url || !String(url).startsWith('/uploads/videos/')) return;
+  try { fs.unlinkSync(path.join(__dirname, String(url).replace(/^\//, ''))); } catch {}
+}
 // Only log requests that error (4xx/5xx) — keeps the terminal quiet under heavy
 // traffic while still surfacing problems.
 app.use(morgan('dev', { skip: (req, res) => res.statusCode < 400 }));
@@ -1503,12 +1522,13 @@ app.get('/api/leaderboard', auth, (req, res) => {
 });
 
 // ── ASSIGNMENTS ───────────────────────────────────────────────────────────────
+const shapeAssignment = a => { const { fileData, ...rest } = a; return { ...rest, hasFile: !!fileData }; };
 app.get('/api/assignments', auth, (req, res) => {
-  if (req.user.role === 'superadmin') return res.json(DB.assignments);
+  if (req.user.role === 'superadmin') return res.json(DB.assignments.map(shapeAssignment));
   if (req.user.role === 'admin') {
     const adminRec = getAdminRecord(req.user.id);
     const myCourseIds = adminCourseIds(adminRec?.id);
-    return res.json(DB.assignments.filter(a => myCourseIds.includes(a.courseId)));
+    return res.json(DB.assignments.filter(a => myCourseIds.includes(a.courseId)).map(shapeAssignment));
   }
   const student  = DB.students.find(s => s.userId === req.user.id);
   if (!student) return res.json([]);
@@ -1517,20 +1537,38 @@ app.get('/api/assignments', auth, (req, res) => {
   const batchAssignments = DB.assignments.filter(a => a.batchId && a.batchId === student.batchId);
   const courseAssignments = DB.assignments.filter(a => a.courseId && enrolled.includes(a.courseId));
   const all = [...new Map([...batchAssignments, ...courseAssignments].map(a => [a.id, a])).values()];
-  res.json(all);
+  res.json(all.map(shapeAssignment));
 });
 
 app.post('/api/assignments', auth, adminOrSuper, (req, res) => {
-  const { courseId, batchId, title, description, dueDate } = req.body;
+  const { courseId, batchId, title, description, dueDate, fileData, fileName, fileType } = req.body;
   if (req.user.role === 'admin' && courseId) {
     const adminRec = getAdminRecord(req.user.id);
     if (!adminCourseIds(adminRec?.id).includes(Number(courseId))) return res.status(403).json({ error: 'Not your course' });
   }
+  if (fileData && fileData.length > 7_000_000) return res.status(413).json({ error: 'Attachment too large (max 5MB)' });
   const adminRec = req.user.role !== 'superadmin' ? getAdminRecord(req.user.id) : null;
-  const a = { id: uuidv4(), courseId: courseId || null, batchId: batchId || null, adminId: adminRec?.id || null, adminName: req.user.name, title, description, dueDate: dueDate || null, createdAt: new Date().toISOString() };
+  const a = { id: uuidv4(), courseId: courseId || null, batchId: batchId || null, adminId: adminRec?.id || null, adminName: req.user.name, title, description, dueDate: dueDate || null,
+    fileData: fileData || null, fileName: fileName || null, fileType: fileType || null,
+    createdAt: new Date().toISOString() };
   DB.assignments.push(a);
   saveDB();
-  res.status(201).json(a);
+  res.status(201).json(shapeAssignment(a));
+});
+
+// Download an assignment's attached file (target students, owning admin, super).
+app.get('/api/assignments/:id/file', auth, (req, res) => {
+  const a = DB.assignments.find(x => x.id === req.params.id);
+  if (!a || !a.fileData) return res.status(404).json({ error: 'No attachment' });
+  let ok = false;
+  if (req.user.role === 'superadmin') ok = true;
+  else if (req.user.role === 'admin') { const ar = getAdminRecord(req.user.id); ok = a.adminId === ar?.id || adminCourseIds(ar?.id).includes(Number(a.courseId)); }
+  else {
+    const s = DB.students.find(x => x.userId === req.user.id);
+    if (s) { const enrolled = DB.enrollments.some(e => e.studentId === s.id && e.courseId === a.courseId); ok = (a.courseId && enrolled) || (a.batchId && a.batchId === s.batchId); }
+  }
+  if (!ok) return res.status(403).json({ error: 'Not allowed' });
+  res.json({ fileData: a.fileData, fileName: a.fileName, fileType: a.fileType });
 });
 
 app.delete('/api/assignments/:id', auth, adminOrSuper, (req, res) => {
@@ -2076,18 +2114,22 @@ app.get('/api/lesson-videos', auth, (req, res) => {
   res.json(list.slice().sort(sortV));
 });
 app.post('/api/lesson-videos', auth, adminOrSuper, (req, res) => {
-  const { courseId, moduleIndex, title, description, videoUrl, visible, order } = req.body;
+  const { courseId, moduleIndex, title, description, videoUrl, visible, order, fileData } = req.body;
   if (!title || !String(title).trim()) return res.status(400).json({ error: 'Title is required' });
-  if (!videoUrl || !String(videoUrl).trim()) return res.status(400).json({ error: 'Video link is required' });
+  if (!fileData && (!videoUrl || !String(videoUrl).trim())) return res.status(400).json({ error: 'Add a video link or upload a file' });
   if (!courseId) return res.status(400).json({ error: 'Course is required' });
   if (!canEditVideoCourse(req, courseId)) return res.status(403).json({ error: 'Not your course' });
+  if (fileData && fileData.length > 75_000_000) return res.status(413).json({ error: 'Video too large (max ~50MB). Use a YouTube/Drive link for bigger videos.' });
   if (!Array.isArray(DB.lesson_videos)) DB.lesson_videos = [];
   const adminRec = req.user.role === 'admin' ? getAdminRecord(req.user.id) : null;
+  const id = uuidv4();
+  let finalUrl = String(videoUrl || '').slice(0, 1000);
+  if (fileData) { const saved = saveVideoFile(id, fileData); if (!saved) return res.status(400).json({ error: 'Could not read the video file' }); finalUrl = saved; }
   const v = {
-    id: uuidv4(), courseId: Number(courseId),
+    id, courseId: Number(courseId),
     moduleIndex: (moduleIndex === undefined || moduleIndex === null || moduleIndex === '') ? null : Number(moduleIndex),
     title: String(title).slice(0, 200), description: String(description || '').slice(0, 500),
-    videoUrl: String(videoUrl).slice(0, 1000),
+    videoUrl: finalUrl,
     visible: visible === undefined ? true : !!visible,
     order: (order === undefined || order === null || order === '') ? null : Number(order),
     adminId: adminRec?.id || null, adminName: req.user.name, createdAt: new Date().toISOString(),
@@ -2101,13 +2143,16 @@ app.put('/api/lesson-videos/:id', auth, adminOrSuper, (req, res) => {
   if (idx < 0) return res.status(404).json({ error: 'Not found' });
   const cur = DB.lesson_videos[idx];
   if (!canEditVideoCourse(req, cur.courseId)) return res.status(403).json({ error: 'Not your course' });
-  const { title, description, videoUrl, moduleIndex, visible, order, courseId } = req.body;
+  const { title, description, videoUrl, moduleIndex, visible, order, courseId, fileData } = req.body;
   if (courseId !== undefined && !canEditVideoCourse(req, courseId)) return res.status(403).json({ error: 'Not your course' });
+  if (fileData && fileData.length > 75_000_000) return res.status(413).json({ error: 'Video too large (max ~50MB).' });
+  let nextUrl = videoUrl !== undefined ? String(videoUrl).slice(0, 1000) : cur.videoUrl;
+  if (fileData) { const saved = saveVideoFile(cur.id, fileData); if (saved) { deleteVideoFile(cur.videoUrl !== saved ? cur.videoUrl : null); nextUrl = saved; } }
   DB.lesson_videos[idx] = {
     ...cur,
     title: title !== undefined ? String(title).slice(0, 200) : cur.title,
     description: description !== undefined ? String(description).slice(0, 500) : cur.description,
-    videoUrl: videoUrl !== undefined ? String(videoUrl).slice(0, 1000) : cur.videoUrl,
+    videoUrl: nextUrl,
     courseId: courseId !== undefined ? Number(courseId) : cur.courseId,
     moduleIndex: moduleIndex !== undefined ? (moduleIndex === '' || moduleIndex === null ? null : Number(moduleIndex)) : cur.moduleIndex,
     visible: visible !== undefined ? !!visible : cur.visible,
@@ -2129,6 +2174,7 @@ app.delete('/api/lesson-videos/:id', auth, adminOrSuper, (req, res) => {
   const v = (DB.lesson_videos || []).find(x => x.id === req.params.id);
   if (!v) return res.status(404).json({ error: 'Not found' });
   if (!canEditVideoCourse(req, v.courseId)) return res.status(403).json({ error: 'Not your course' });
+  deleteVideoFile(v.videoUrl); // remove the uploaded file from disk, if any
   DB.lesson_videos = (DB.lesson_videos || []).filter(x => x.id !== req.params.id);
   saveDB();
   res.json({ ok: true });

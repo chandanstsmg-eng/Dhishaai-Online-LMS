@@ -9,6 +9,9 @@ server/dhishaai_lms.json
 *.db-wal
 *.db-shm
 
+# ─── Uploaded lesson video files (live on the server's disk, not in git) ───────
+server/uploads/
+
 # ─── Secrets — copy server/.env.example to server/.env ─────────────────────────
 .env
 server/.env

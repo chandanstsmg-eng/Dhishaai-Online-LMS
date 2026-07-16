@@ -1746,21 +1746,33 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
   // ── Lesson videos (admin adds video links; enable/disable per video) ──
   const [videoCourse, setVideoCourse] = useState(null); // course whose videos are being managed
   const [videoList, setVideoList] = useState([]);
-  const blankVideo = { id: null, title: "", videoUrl: "", description: "", moduleIndex: "", order: "" };
+  const blankVideo = { id: null, title: "", videoUrl: "", description: "", moduleIndex: "", order: "", fileData: null, fileName: null, fileType: null };
   const [vForm, setVForm] = useState(blankVideo);
+  const [vUploading, setVUploading] = useState(false);
   const loadVideos = (cid) => GET(`/lesson-videos?courseId=${cid}`).then(setVideoList).catch(() => {});
   const openVideos = (c) => { setVideoCourse(c); setVForm(blankVideo); loadVideos(c.id); };
+  const onVideoFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 50 * 1024 * 1024) { show("Video too large (max 50MB). For bigger videos, paste a YouTube/Drive link instead.", "error"); return; }
+    const reader = new FileReader();
+    reader.onload = ev => setVForm(f => ({ ...f, fileData: ev.target.result, fileName: file.name, fileType: file.type, videoUrl: "" }));
+    reader.readAsDataURL(file);
+  };
   const saveVideo = async () => {
     if (!vForm.title.trim()) { show("Enter a video title", "error"); return; }
-    if (!vForm.videoUrl.trim()) { show("Paste the video link", "error"); return; }
+    if (!vForm.videoUrl.trim() && !vForm.fileData) { show("Paste a video link or upload a file", "error"); return; }
+    setVUploading(true);
     try {
       const body = { title: vForm.title, videoUrl: vForm.videoUrl, description: vForm.description, courseId: videoCourse.id, moduleIndex: vForm.moduleIndex === "" ? null : Number(vForm.moduleIndex), order: vForm.order === "" ? null : Number(vForm.order) };
+      if (vForm.fileData) { body.fileData = vForm.fileData; body.fileType = vForm.fileType; }
       if (vForm.id) await PUT(`/lesson-videos/${vForm.id}`, body);
       else await POST("/lesson-videos", body);
       show(vForm.id ? "Video updated" : "Video added"); setVForm(blankVideo); loadVideos(videoCourse.id);
     } catch (e) { show(e.message, "error"); }
+    finally { setVUploading(false); }
   };
-  const editVideo = (v) => setVForm({ id: v.id, title: v.title, videoUrl: v.videoUrl, description: v.description || "", moduleIndex: v.moduleIndex != null ? String(v.moduleIndex) : "", order: v.order != null ? String(v.order) : "" });
+  const editVideo = (v) => setVForm({ id: v.id, title: v.title, videoUrl: v.videoUrl, description: v.description || "", moduleIndex: v.moduleIndex != null ? String(v.moduleIndex) : "", order: v.order != null ? String(v.order) : "", fileData: null, fileName: null, fileType: null });
   const toggleVideo = async (v) => { try { await POST(`/lesson-videos/${v.id}/toggle`, {}); loadVideos(videoCourse.id); } catch (e) { show(e.message, "error"); } };
   const delVideo = async (v) => { if (!confirm(`Delete video "${v.title}"?`)) return; try { await DELETE(`/lesson-videos/${v.id}`); loadVideos(videoCourse.id); } catch (e) { show(e.message, "error"); } };
 
@@ -1931,7 +1943,22 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
           <div style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 12, padding: 16, marginBottom: 16 }}>
             <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10, color: "var(--text)" }}>{vForm.id ? "Edit video" : "Add a video"}</div>
             <div className="form-group"><label className="form-label">Title</label><input className="input-field" value={vForm.title} onChange={e => setVForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Introduction to Power BI (recorded)" /></div>
-            <div className="form-group"><label className="form-label">Video link</label><input className="input-field" value={vForm.videoUrl} onChange={e => setVForm(f => ({ ...f, videoUrl: e.target.value }))} placeholder="https://youtube.com/watch?v=...  ·  Vimeo / Google Drive / .mp4" /></div>
+            <div className="form-group">
+              <label className="form-label">Video link <span style={{ color: "var(--text2)", fontWeight: 500 }}>(YouTube / Vimeo / Google Drive / .mp4)</span></label>
+              <input className="input-field" value={vForm.videoUrl} onChange={e => setVForm(f => ({ ...f, videoUrl: e.target.value, fileData: f.fileData && e.target.value ? null : f.fileData, fileName: e.target.value ? null : f.fileName }))} placeholder="https://youtube.com/watch?v=..." disabled={!!vForm.fileData} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">…or upload a video from your device <span style={{ color: "var(--text2)", fontWeight: 500 }}>(gallery/file · max 50MB · plays in-app, works offline on the LAN)</span></label>
+              {vForm.fileName ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 10, border: `1.5px solid ${B.success}55`, background: `${B.success}10` }}>
+                  <Ico n="check" s={16} c={B.success} />
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>🎞 {vForm.fileName}</span>
+                  <button type="button" onClick={() => setVForm(f => ({ ...f, fileData: null, fileName: null, fileType: null }))} style={{ background: "none", border: "none", color: B.danger, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>Remove</button>
+                </div>
+              ) : (
+                <input type="file" accept="video/*" onChange={onVideoFile} className="input-field" style={{ padding: 8 }} />
+              )}
+            </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div className="form-group"><label className="form-label">Module <span style={{ color: "var(--text2)", fontWeight: 500 }}>(where students see it)</span></label>
                 <select className="input-field" value={vForm.moduleIndex} onChange={e => setVForm(f => ({ ...f, moduleIndex: e.target.value }))}>
@@ -1943,13 +1970,13 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
             </div>
             <div className="form-group"><label className="form-label">Description (optional)</label><input className="input-field" value={vForm.description} onChange={e => setVForm(f => ({ ...f, description: e.target.value }))} /></div>
             <div style={{ display: "flex", gap: 8 }}>
-              <button className="btn btn-primary btn-sm" onClick={saveVideo}>{vForm.id ? "Save changes" : "＋ Add video"}</button>
+              <button className="btn btn-primary btn-sm" onClick={saveVideo} disabled={vUploading}>{vUploading ? <><Spinner size={14} color="#fff" />Uploading…</> : (vForm.id ? "Save changes" : "＋ Add video")}</button>
               {vForm.id && <button className="btn btn-secondary btn-sm" onClick={() => setVForm(blankVideo)}>Cancel edit</button>}
             </div>
-            {vForm.videoUrl.trim() && (
+            {(vForm.videoUrl.trim() || vForm.fileData) && (
               <div style={{ marginTop: 14 }}>
                 <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 6, fontWeight: 600 }}>Preview — this is exactly how students see it (plays inside the site):</div>
-                <VideoLesson v={{ title: vForm.title || "Preview", description: vForm.description, videoUrl: vForm.videoUrl }} />
+                <VideoLesson v={{ title: vForm.title || "Preview", description: vForm.description, videoUrl: vForm.videoUrl || vForm.fileData }} />
               </div>
             )}
           </div>
@@ -3637,6 +3664,9 @@ const ForumPage = ({ user }) => {
 function toVideoEmbed(url) {
   if (!url) return { type: "link", src: "" };
   const u = String(url).trim();
+  // Uploaded video (data URL preview) or server-hosted file → native player.
+  if (/^data:video\//i.test(u)) return { type: "video", src: u };
+  if (/^\/uploads\/videos\//i.test(u)) return { type: "video", src: u };
   // ── YouTube: match every shape, then embed inline (never redirect) ──
   let ytId = null;
   let m = u.match(/(?:youtube(?:-nocookie)?\.com\/(?:watch\?(?:[^#]*&)?v=|embed\/|shorts\/|live\/|v\/)|youtu\.be\/)([\w-]{11})/i);
@@ -3811,7 +3841,7 @@ const AssignmentsPage = ({ user }) => {
   const isAdmin = user.role === "admin" || user.role === "superadmin";
 
   const blankUpload = { title: "", description: "", type: "file", courseId: "", moduleIndex: "", batchId: "", pinned: false, file: null, fileData: null, fileName: null, fileType: null, fileSize: null, files: [] };
-  const blankAssign = { title: "", description: "", courseId: "", batchId: "", dueDate: "" };
+  const blankAssign = { title: "", description: "", courseId: "", batchId: "", dueDate: "", fileData: null, fileName: null, fileType: null };
   const [uploadForm, setUploadForm] = useState(blankUpload);
   const [assignForm, setAssignForm] = useState(blankAssign);
 
@@ -3911,6 +3941,14 @@ const AssignmentsPage = ({ user }) => {
   };
 
   // ── Create assignment ──
+  const onAssignFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { show("File too large (max 5MB)", "error"); return; }
+    const reader = new FileReader();
+    reader.onload = ev => setAssignForm(f => ({ ...f, fileData: ev.target.result, fileName: file.name, fileType: file.type }));
+    reader.readAsDataURL(file);
+  };
   const saveAssignment = async () => {
     if (!assignForm.title) { show("Title required", "error"); return; }
     try {
@@ -4099,6 +4137,12 @@ const AssignmentsPage = ({ user }) => {
                               <Ico n="clock" s={13} />Due: {new Date(a.dueDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}{overdue ? " — Overdue!" : ""}
                             </div>
                           )}
+                          {a.hasFile && (
+                            <button className="btn btn-secondary btn-sm" style={{ marginTop: 10 }}
+                              onClick={() => openStoredFile(`/assignments/${a.id}/file`, a.fileName || "attachment").catch(() => show("Could not open the file", "error"))}>
+                              <Ico n="assign" s={13} />View attachment
+                            </button>
+                          )}
                         </div>
                         {isAdmin && (
                           <button className="btn btn-danger btn-xs" onClick={() => deleteAssignment(a.id)} style={{ flexShrink: 0 }}>
@@ -4274,6 +4318,18 @@ const AssignmentsPage = ({ user }) => {
           <div className="form-group">
             <label className="form-label">Due Date</label>
             <input className="input-field" type="date" value={assignForm.dueDate} onChange={e => setAssignForm(f => ({ ...f, dueDate: e.target.value }))} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Attach a file <span style={{ color: "var(--text2)", fontWeight: 500 }}>(optional — PDF / doc / image, max 5MB — students can view it)</span></label>
+            {assignForm.fileName ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 10, border: `1.5px solid ${B.success}55`, background: `${B.success}10` }}>
+                <Ico n="check" s={16} c={B.success} />
+                <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{assignForm.fileName}</span>
+                <button type="button" onClick={() => setAssignForm(f => ({ ...f, fileData: null, fileName: null, fileType: null }))} style={{ background: "none", border: "none", color: B.danger, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>Remove</button>
+              </div>
+            ) : (
+              <input type="file" onChange={onAssignFile} className="input-field" style={{ padding: 8 }} />
+            )}
           </div>
           <div style={{ display: "flex", gap: 10 }}>
             <button className="btn btn-primary" style={{ flex: 1, justifyContent: "center" }} onClick={saveAssignment}>
