@@ -23,7 +23,7 @@ const path    = require('path');
 const os      = require('os');
 const morgan  = require('morgan');
 const { v4: uuidv4 } = require('uuid');
-const store   = require('./db');   // SQLite persistence layer (with JSON fallback)
+const store   = require('./store'); // persistence backend: SQLite by default, MySQL when DB_ENGINE=mysql
 const ai      = require('./ai');   // Claude-powered AI Tutor + Playground (key stays server-side)
 
 require('dotenv').config();
@@ -83,11 +83,13 @@ let DB = {
   lesson_videos: [],  // { id, courseId, moduleIndex, title, description, videoUrl, visible, order, adminId, adminName, createdAt } — admin-added recorded video lessons
 };
 
-function loadDB() {
-  // Prefer SQLite; fall back to the JSON file if the native module can't load.
-  if (store.init()) {
+async function loadDB() {
+  // Prefer the configured DB backend (SQLite or MySQL); fall back to the JSON file
+  // if it can't be reached. `await` works for both: SQLite returns synchronously
+  // (awaiting a plain value is a harmless no-op), MySQL returns promises.
+  if (await store.init()) {
     try {
-      if (store.isEmpty()) {
+      if (await store.isEmpty()) {
         // Fresh database — import existing JSON data (or seed), then move file blobs out.
         if (fs.existsSync(DB_PATH)) {
           try { DB = { ...DB, ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) }; }
@@ -96,21 +98,21 @@ function loadDB() {
         if (!DB.admins) DB.admins = [];
         if (!DB.authorities) DB.authorities = [];
         if (!Array.isArray(DB.users) || DB.users.length === 0) seedDB();
-        migrateMaterialFilesOut();
-        store.persist(DB);
-        console.log('✅ SQLite ready — imported existing data into', store.DB_FILE);
+        await migrateMaterialFilesOut();
+        await store.persist(DB);
+        console.log('✅ Database ready — imported existing data into', store.DB_FILE);
       } else {
-        DB = { ...DB, ...store.loadAll() };
+        DB = { ...DB, ...(await store.loadAll()) };
         if (!DB.admins) DB.admins = [];
         if (!DB.authorities) DB.authorities = [];
-        console.log('✅ Database loaded from SQLite:', store.DB_FILE);
+        console.log('✅ Database loaded from', store.DB_FILE);
       }
       return;
     } catch (e) {
-      console.error('SQLite load error, falling back to JSON:', e.message);
+      console.error('DB load error, falling back to JSON:', e.message);
     }
   } else {
-    console.warn('⚠️  better-sqlite3 unavailable — using JSON file storage. Run "npm install" on the server to enable SQLite.');
+    console.warn('⚠️  Configured database unavailable — using JSON file storage. Check server/.env and run "npm install" in server/.');
   }
 
   // ── JSON fallback (original behavior) ──
@@ -139,7 +141,10 @@ function saveDB() {
     if (_saveTimer) return; // a flush is already scheduled
     _saveTimer = setTimeout(() => {
       _saveTimer = null;
-      try { store.persist(DB); } catch (e) { console.error('SQLite persist error:', e.message); }
+      // persist() may be sync (SQLite) or async (MySQL) — normalize to a promise so
+      // either backend's errors are caught without blocking the request path.
+      try { Promise.resolve(store.persist(DB)).catch(e => console.error('DB persist error:', e.message)); }
+      catch (e) { console.error('DB persist error:', e.message); }
     }, 400);
     return;
   }
@@ -150,25 +155,26 @@ function saveDB() {
   } catch (e) { console.error('DB save error:', e.message); }
 }
 
-// Force any pending debounced write to disk immediately (used on shutdown).
-function flushDB() {
+// Force any pending debounced write out immediately (used on shutdown). Awaits the
+// backend so MySQL finishes committing before the process exits.
+async function flushDB() {
   if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
-  try { if (store.available) store.persist(DB); } catch (e) { console.error('SQLite flush error:', e.message); }
+  try { if (store.available) await store.persist(DB); } catch (e) { console.error('DB flush error:', e.message); }
 }
 
 // One-time: move base64 file blobs embedded in materials out of RAM into the
 // files table, so the in-memory model / snapshots stay small at scale.
-function migrateMaterialFilesOut() {
+async function migrateMaterialFilesOut() {
   if (!store.available || !Array.isArray(DB.materials)) return;
   let moved = 0;
-  DB.materials.forEach(m => {
+  for (const m of DB.materials) {
     if (m && m.fileData) {
-      store.putFile(m.id, m.fileData, m.fileName, m.fileType);
+      await store.putFile(m.id, m.fileData, m.fileName, m.fileType);
       m.hasFile = true;
       m.fileData = null;
       moved++;
     }
-  });
+  }
   if (moved) console.log(`✅ Moved ${moved} file blob(s) out of the DB into the files table`);
 }
 
@@ -1636,7 +1642,7 @@ app.get('/api/materials', auth, (req, res) => {
   res.json(result.map(m => ({ ...m, fileData: undefined })));
 });
 
-app.post('/api/materials', auth, adminOrSuper, (req, res) => {
+app.post('/api/materials', auth, adminOrSuper, async (req, res) => {
   if (!DB.materials) DB.materials = [];
   const { courseId, batchId, title, description, type, fileData, fileName, fileType, fileSize, pinned, moduleIndex, order } = req.body;
   if (!title) return res.status(400).json({ error: 'Title required' });
@@ -1667,7 +1673,7 @@ app.post('/api/materials', auth, adminOrSuper, (req, res) => {
     createdAt: new Date().toISOString(),
   };
   if (fileData) {
-    if (store.available) store.putFile(m.id, fileData, fileName, fileType); // blob kept out of RAM
+    if (store.available) await store.putFile(m.id, fileData, fileName, fileType); // blob kept out of RAM
     else m.fileData = fileData; // JSON fallback keeps the blob inline
   }
   DB.materials.push(m);
@@ -1677,7 +1683,7 @@ app.post('/api/materials', auth, adminOrSuper, (req, res) => {
 });
 
 // Download a specific material file (returns full base64)
-app.get('/api/materials/:id/download', auth, (req, res) => {
+app.get('/api/materials/:id/download', auth, async (req, res) => {
   if (!DB.materials) return res.status(404).json({ error: 'Not found' });
   const m = DB.materials.find(x => x.id === req.params.id);
   if (!m) return res.status(404).json({ error: 'Not found' });
@@ -1694,7 +1700,7 @@ app.get('/api/materials/:id/download', auth, (req, res) => {
 
   let data = m.fileData, fileName = m.fileName, fileType = m.fileType;
   if (!data && store.available) {
-    const f = store.getFile(m.id); // load blob on demand from the files table
+    const f = await store.getFile(m.id); // load blob on demand from the files table
     if (f) { data = f.data; fileName = f.fileName || fileName; fileType = f.fileType || fileType; }
   }
   if (!data) return res.status(404).json({ error: 'No file attached' });
@@ -1729,7 +1735,7 @@ app.put('/api/materials/:id', auth, adminOrSuper, (req, res) => {
   res.json({ ...DB.materials[idx], fileData: undefined });
 });
 
-app.delete('/api/materials/:id', auth, adminOrSuper, (req, res) => {
+app.delete('/api/materials/:id', auth, adminOrSuper, async (req, res) => {
   if (!DB.materials) return res.status(404).json({ error: 'Not found' });
   const m = DB.materials.find(x => x.id === req.params.id);
   if (!m) return res.status(404).json({ error: 'Not found' });
@@ -1738,7 +1744,7 @@ app.delete('/api/materials/:id', auth, adminOrSuper, (req, res) => {
     if (m.adminId !== adminRec?.id) return res.status(403).json({ error: 'Not yours' });
   }
   DB.materials = DB.materials.filter(x => x.id !== req.params.id);
-  if (store.available) store.delFile(req.params.id);
+  if (store.available) await store.delFile(req.params.id);
   saveDB();
   res.json({ success: true });
 });
@@ -2285,7 +2291,6 @@ if (fs.existsSync(distIndex)) {
   });
 }
 
-loadDB();
 // Best-effort: open the Windows Firewall for our port so other devices on the
 // LAN/Wi-Fi can connect. Silently no-ops if not on Windows or not elevated
 // (in that case, run Allow-Firewall-Once.bat as administrator instead).
@@ -2318,7 +2323,8 @@ function lanIPs() {
   return out;
 }
 
-app.listen(PORT, '0.0.0.0', () => {
+function startServer() {
+  app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n🚀 DhishaAI Enterprise LMS v5.0`);
   console.log(`\n✅ On this PC:        http://localhost:${PORT}`);
   const ips = lanIPs();
@@ -2335,15 +2341,24 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`🤖 ML Admin    : anil@dhishaai.com      / ml123`);
   console.log(`📋 Excel Admin : suma@dhishaai.com      / excel123`);
   console.log(`👤 Students    : rahul@email.com        / student123\n`);
-});
+  });
+}
 
-// Flush any pending debounced write to disk on shutdown so no data is lost.
+// Load the database first (may be async for MySQL), then start listening. If the DB
+// can't be reached at all, we still start so the operator sees the error and the
+// health endpoint responds, rather than the process dying silently.
+loadDB()
+  .then(startServer)
+  .catch(err => { console.error('❌ Startup failed:', err); startServer(); });
+
+// Flush any pending debounced write out on shutdown so no data is lost. Awaits the
+// backend (MySQL commits) before exiting.
 let _shuttingDown = false;
-function shutdown() {
+async function shutdown() {
   if (_shuttingDown) return;
   _shuttingDown = true;
   console.log('\n💾 Saving database before exit...');
-  try { flushDB(); } catch (e) { console.error('Flush on exit failed:', e.message); }
+  try { await flushDB(); } catch (e) { console.error('Flush on exit failed:', e.message); }
   process.exit(0);
 }
 process.on('SIGINT', shutdown);
