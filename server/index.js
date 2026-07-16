@@ -374,6 +374,23 @@ function studentsInCourses(courseIds) {
   return [...ids];
 }
 
+/** Student IDs an admin may see. Normally = students enrolled in the admin's
+ *  courses. If a course is restricted to a batch (course.ownerBatchId), only
+ *  that batch's students count toward that course — so a batch's students are
+ *  visible only to the admin assigned that course+batch. */
+function adminVisibleStudentIds(adminId) {
+  const set = new Set();
+  for (const c of DB.courses.filter(c => c.ownerId === adminId)) {
+    const enrolled = DB.enrollments.filter(e => e.courseId === c.id).map(e => e.studentId);
+    for (const sid of enrolled) {
+      if (!c.ownerBatchId) { set.add(sid); continue; }
+      const s = DB.students.find(x => x.id === sid);
+      if (s && String(s.batchId || '') === String(c.ownerBatchId)) set.add(sid);
+    }
+  }
+  return [...set];
+}
+
 /** Is the quiz enabled for a specific batch on this course?
  *  A per-batch override (course.quizBatch[batchId]) wins; otherwise falls back to the
  *  course-wide quizEnabled flag. Lets different admins/batches control quizzes independently. */
@@ -476,7 +493,7 @@ app.get('/api/super/admins', auth, superOnly, (req, res) => {
   const result = DB.admins.map(a => ({
     ...a,
     courses: DB.courses.filter(c => c.ownerId === a.id).map(c => ({ id: c.id, title: c.title, category: c.category })),
-    studentCount: studentsInCourses(adminCourseIds(a.id)).length,
+    studentCount: adminVisibleStudentIds(a.id).length,
   }));
   res.json(result);
 });
@@ -623,7 +640,7 @@ app.get('/api/super/analytics', auth, superOnly, (req, res) => {
       name:         a.name,
       subject:      a.subject,
       courses:      DB.courses.filter(c=>c.ownerId===a.id).length,
-      students:     studentsInCourses(adminCourseIds(a.id)).length,
+      students:     adminVisibleStudentIds(a.id).length,
     })),
     courseBreakdown: DB.courses.map(c => ({
       title:    c.title,
@@ -778,7 +795,7 @@ app.post('/api/projects', auth, adminOrSuper, (req, res) => {
     sId = Number(studentId);
     const student = DB.students.find(s => s.id === sId);
     if (!student) return res.status(404).json({ error: 'Student not found' });
-    if (req.user.role === 'admin' && !studentsInCourses(adminCourseIds(adminRec?.id)).includes(sId)) return res.status(403).json({ error: 'Not your student' });
+    if (req.user.role === 'admin' && !adminVisibleStudentIds(adminRec?.id).includes(sId)) return res.status(403).json({ error: 'Not your student' });
   } else {
     bId = String(batchId || '');
     if (!bId) return res.status(400).json({ error: 'Batch required' });
@@ -966,13 +983,15 @@ app.put('/api/courses/:id', auth, adminOrSuper, (req, res) => {
   if (idx < 0) return res.status(404).json({ error: 'Not found' });
 
   const body = { ...req.body };
-  // Admin can only edit their own courses — and can NEVER change ownership.
+  // Admin can only edit their own courses — and can NEVER change ownership/batch scope.
   if (req.user.role === 'admin') {
     const adminRec = getAdminRecord(req.user.id);
     if (DB.courses[idx].ownerId !== adminRec?.id) return res.status(403).json({ error: 'Not your course' });
-    delete body.ownerId; // only the superadmin can reassign a course to another admin
-  } else if ('ownerId' in body) {
-    body.ownerId = body.ownerId || null; // superadmin: "" → unassigned
+    delete body.ownerId;       // only the superadmin can reassign a course to another admin
+    delete body.ownerBatchId;  // …or restrict it to a batch
+  } else {
+    if ('ownerId' in body) body.ownerId = body.ownerId || null;            // superadmin: "" → unassigned
+    if ('ownerBatchId' in body) body.ownerBatchId = body.ownerBatchId || null; // "" → all batches (no restriction)
   }
 
   DB.courses[idx] = { ...DB.courses[idx], ...body, id };
@@ -1099,8 +1118,7 @@ app.get('/api/students', auth, adminOrSuper, (req, res) => {
   } else {
     const adminRec = getAdminRecord(userId);
     if (!adminRec) return res.json([]);
-    const myCourseIds = adminCourseIds(adminRec.id);
-    visibleStudentIds = studentsInCourses(myCourseIds);
+    visibleStudentIds = adminVisibleStudentIds(adminRec.id);
   }
 
   const result = DB.students
@@ -1151,8 +1169,7 @@ app.put('/api/students/:id', auth, adminOrSuper, (req, res) => {
   // Admin can only update students in their courses
   if (req.user.role === 'admin') {
     const adminRec = getAdminRecord(req.user.id);
-    const myCourseIds = adminCourseIds(adminRec.id);
-    const myStudentIds = studentsInCourses(myCourseIds);
+    const myStudentIds = adminVisibleStudentIds(adminRec.id);
     if (!myStudentIds.includes(id)) return res.status(403).json({ error: 'Not your student' });
   }
 
@@ -1204,7 +1221,7 @@ app.delete('/api/students/:id', auth, adminOrSuper, (req, res) => {
 
   if (req.user.role === 'admin') {
     const adminRec = getAdminRecord(req.user.id);
-    const myStudentIds = studentsInCourses(adminCourseIds(adminRec.id));
+    const myStudentIds = adminVisibleStudentIds(adminRec.id);
     if (!myStudentIds.includes(id)) return res.status(403).json({ error: 'Not your student' });
   }
 
@@ -1374,7 +1391,7 @@ app.get('/api/analytics/overview', auth, adminOrSuper, (req, res) => {
 
   const adminRec     = getAdminRecord(req.user.id);
   const myCourseIds  = adminCourseIds(adminRec?.id);
-  const myStudentIds = studentsInCourses(myCourseIds);
+  const myStudentIds = adminVisibleStudentIds(adminRec?.id);
   const myStudents   = DB.students.filter(s => myStudentIds.includes(s.id));
   const myResults    = DB.quiz_results.filter(r => myCourseIds.includes(r.courseId));
 
@@ -1514,7 +1531,7 @@ app.get('/api/leaderboard', auth, (req, res) => {
   // Admin: only their students on leaderboard
   if (req.user.role === 'admin') {
     const adminRec = getAdminRecord(req.user.id);
-    const myStudentIds = studentsInCourses(adminCourseIds(adminRec?.id));
+    const myStudentIds = adminVisibleStudentIds(adminRec?.id);
     const board = DB.students.filter(s => myStudentIds.includes(s.id))
       .map(s => ({ id: s.id, name: s.name, xp: s.xp, streak: s.streak, badges: s.badges }))
       .sort((a,b) => b.xp - a.xp);
@@ -1837,7 +1854,7 @@ app.get('/api/admin/export', auth, adminOrSuper, (req, res) => {
   } else {
     const adminRec     = getAdminRecord(req.user.id);
     const myCourseIds  = adminCourseIds(adminRec?.id);
-    const myStudentIds = studentsInCourses(myCourseIds);
+    const myStudentIds = adminVisibleStudentIds(adminRec?.id);
     exportData = { exportedAt: new Date().toISOString(), scope: adminRec?.subject || 'admin', admin: adminRec?.name, courses: DB.courses.filter(c=>myCourseIds.includes(c.id)), students: DB.students.filter(s=>myStudentIds.includes(s.id)), enrollments: DB.enrollments.filter(e=>myCourseIds.includes(e.courseId)), progress: DB.progress.filter(p=>myCourseIds.includes(p.courseId)), quizResults: DB.quiz_results.filter(r=>myCourseIds.includes(r.courseId)) };
   }
   res.setHeader('Content-Disposition', `attachment; filename=dhishaai_export_${Date.now()}.json`);
@@ -1868,7 +1885,7 @@ app.get('/api/admin/export/students.csv', auth, adminOrSuper, (req, res) => {
     students = DB.students;
   } else {
     const adminRec = getAdminRecord(req.user.id);
-    const ids = studentsInCourses(adminCourseIds(adminRec?.id));
+    const ids = adminVisibleStudentIds(adminRec?.id);
     students = DB.students.filter(s => ids.includes(s.id));
   }
   const headers = ['Name', 'Email', 'Phone', 'Qualification', 'Experience', 'Company', 'Batch', 'Courses Enrolled', 'Avg Progress %', 'Quiz Avg %', 'XP', 'Streak (days)', 'Status', 'Last Active', 'Joined'];

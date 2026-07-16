@@ -1708,6 +1708,7 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
   const isSuper = user?.role === "superadmin";
   const [courses, setCourses] = useState([]);
   const [admins, setAdmins] = useState([]);
+  const [batches, setBatches] = useState([]);
   const [modal, setModal] = useState(null);
   const [topicsModal, setTopicsModal] = useState(null); // holds the course object
   const [show, toastEl] = useToast();
@@ -1715,7 +1716,7 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
   const COLORS = ["#4F46E5", "#0EA5E9", "#F59E0B", "#10B981", "#EC4899", "#EF4444", "#8B5CF6", "#E87722"];
 
   const load = () => GET("/courses").then(setCourses);
-  useEffect(() => { load(); if (isSuper) GET("/super/admins").then(setAdmins).catch(() => {}); }, []);
+  useEffect(() => { load(); if (isSuper) { GET("/super/admins").then(setAdmins).catch(() => {}); GET("/batches").then(setBatches).catch(() => {}); } }, []);
   const adminName = id => admins.find(a => a.id === id)?.name || "Unassigned";
 
   const openAdd = () => { setForm({ title: "", category: "Python", lessons: 0, duration: "", description: "", color: "#4F46E5", ownerId: "" }); setModal("add"); };
@@ -1741,6 +1742,15 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
     try {
       await PUT(`/courses/${course.id}`, { ownerId: ownerId || null });
       show(ownerId ? `Course moved to ${adminName(ownerId)}` : "Course unassigned");
+      load(); onCourseChange?.();
+    } catch (e) { show(e.message, "error"); }
+  };
+  // Superadmin: restrict this course's owner to ONE batch (so only that batch's
+  // students are visible to them). Empty = all batches.
+  const reassignBatch = async (course, batchId) => {
+    try {
+      await PUT(`/courses/${course.id}`, { ownerBatchId: batchId || null });
+      show(batchId ? "Admin now sees only this batch's students for this course" : "Admin sees all students for this course");
       load(); onCourseChange?.();
     } catch (e) { show(e.message, "error"); }
   };
@@ -1857,6 +1867,15 @@ const AdminCoursesPage = ({ user, onCourseChange }) => {
                     <select className="input-field" value={c.ownerId || ""} onChange={e => reassignOwner(c, e.target.value)} style={{ width: "auto", minWidth: 140, maxWidth: 170, padding: "6px 10px", fontSize: 13 }} title="Shift this course to another admin">
                       <option value="">— Unassigned —</option>
                       {admins.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  </div>
+                )}
+                {isSuper && c.ownerId && (
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 13, color: "var(--text2)" }}>Batch (only)</span>
+                    <select className="input-field" value={c.ownerBatchId || ""} onChange={e => reassignBatch(c, e.target.value)} style={{ width: "auto", minWidth: 140, maxWidth: 170, padding: "6px 10px", fontSize: 13 }} title="Restrict this admin to one batch of students for this course">
+                      <option value="">All batches</option>
+                      {batches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
                     </select>
                   </div>
                 )}
