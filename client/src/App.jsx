@@ -1490,64 +1490,18 @@ const AdminStudentsPage = ({ batches, courses }) => {
 // ─── SHARED: MODULE / TOPIC MODEL ──────────────────────────────────────────────
 // Per-subject topic content for the guided learning flow (used by student course
 // view AND the admin quiz creator so quizzes can be tied to real module topics).
-const TOPIC_SETS = {
-  Python: [
-    { title: "Introduction & Setup", duration: "12 min" },
-    { title: "Variables & Data Types", duration: "18 min" },
-    { title: "Operators & Expressions", duration: "20 min" },
-    { title: "Control Flow — if / elif / else", duration: "25 min" },
-    { title: "Loops — for & while", duration: "22 min" },
-    { title: "Functions & Lambda", duration: "30 min" },
-    { title: "Lists, Tuples, Dicts & Sets", duration: "28 min" },
-    { title: "Mini Project", duration: "45 min" },
-  ],
-  SQL: [
-    { title: "Databases & Tables", duration: "15 min" },
-    { title: "SELECT & Filtering (WHERE)", duration: "20 min" },
-    { title: "Sorting & Limiting Results", duration: "16 min" },
-    { title: "JOINs Explained", duration: "26 min" },
-    { title: "Aggregations & GROUP BY", duration: "22 min" },
-    { title: "Subqueries & CTEs", duration: "24 min" },
-  ],
-  BI: [
-    // Module 1 — Introduction to Power BI (Session 1)
-    { title: "What is Power BI — Purpose & Why", duration: "15 min" },
-    { title: "Architecture & Core Components", duration: "18 min" },
-    { title: "Editions, Licensing & Versions", duration: "20 min" },
-    // Module 2 — Building with Power BI
-    { title: "Power Query & Data Transformation", duration: "25 min" },
-    { title: "Data Modeling & DAX", duration: "30 min" },
-    { title: "Dashboards, Reports & Publishing", duration: "28 min" },
-  ],
-  ML: [
-    { title: "What is Machine Learning?", duration: "15 min" },
-    { title: "Supervised vs Unsupervised", duration: "20 min" },
-    { title: "Linear Regression", duration: "28 min" },
-    { title: "Classification Models", duration: "30 min" },
-    { title: "Model Evaluation Metrics", duration: "25 min" },
-    { title: "Overfitting & Tuning", duration: "22 min" },
-  ],
-  Excel: [
-    { title: "Excel Interface & Basics", duration: "12 min" },
-    { title: "Formulas & Functions", duration: "20 min" },
-    { title: "VLOOKUP & XLOOKUP", duration: "22 min" },
-    { title: "Pivot Tables", duration: "25 min" },
-    { title: "Charts & Visualization", duration: "20 min" },
-    { title: "Building Excel Dashboards", duration: "25 min" },
-  ],
-};
-const DEFAULT_TOPICS = [
-  { title: "Getting Started", duration: "15 min" },
-  { title: "Core Concepts", duration: "20 min" },
-  { title: "Hands-on Practice", duration: "25 min" },
-  { title: "Intermediate Techniques", duration: "22 min" },
-  { title: "Real-world Application", duration: "28 min" },
-  { title: "Wrap-up & Review", duration: "15 min" },
-];
+// (The former TOPIC_SETS / DEFAULT_TOPICS fabricated curriculum was removed:
+//  it presented invented topics and durations as if an instructor had written
+//  them. Modules now come only from what an admin actually authors.)
 const TOPICS_PER_MODULE = 3;
 
-// Module list for a course. Prefers ADMIN-AUTHORED modules (course.modules); if the
-// admin hasn't created any yet, falls back to the built-in per-subject topic outline.
+// Module list for a course — ONLY what the admin actually authored.
+//
+// This used to fall back to a built-in per-subject outline (TOPIC_SETS), so a
+// course with no content still showed students a full, professional-looking
+// syllabus with per-topic durations that no instructor had ever written — and
+// that invented list became the denominator of their completion percentage.
+// A course with nothing in it now honestly shows nothing.
 function courseModules(course) {
   if (course && Array.isArray(course.modules) && course.modules.length) {
     return course.modules.map((m, i) => ({
@@ -1556,12 +1510,7 @@ function courseModules(course) {
       topics: (m.topics || []).map(t => (typeof t === "string" ? { title: t, duration: "" } : t)),
     }));
   }
-  const topics = (course && (TOPIC_SETS[course.category] || DEFAULT_TOPICS)) || DEFAULT_TOPICS;
-  const mods = [];
-  for (let i = 0; i < topics.length; i += TOPICS_PER_MODULE) {
-    mods.push({ index: mods.length, title: `Module ${mods.length + 1}`, topics: topics.slice(i, i + TOPICS_PER_MODULE) });
-  }
-  return mods;
+  return [];
 }
 
 // Build the student-facing module list: attach the matching quiz + global topic indexes.
@@ -2941,6 +2890,11 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
 
         {!selected.syllabusUnlocked ? (
           <EmptyState icon="lock" title="Syllabus Not Yet Available" desc="Your instructor hasn't released the syllabus yet. Check back soon!" />
+        ) : modules.length === 0 ? (
+          /* Honest empty state. This page used to invent a syllabus when the
+             admin hadn't authored one, so students saw topics nobody wrote. */
+          <EmptyState icon="book" title="Course content coming soon"
+            desc="Your instructor hasn't published the lessons for this course yet. You'll see them here as soon as they do." />
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {modules.map(m => {
@@ -3077,12 +3031,15 @@ const StudentCoursesPage = ({ openCourseId, onConsumeOpen }) => {
                 <div style={{ height: 110, background: `linear-gradient(135deg,${c.color},${c.color}bb)`, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
                   <Ico n="book" s={44} c="rgba(255,255,255,.35)" />
                   <span className="badge" style={{ position: "absolute", top: 12, left: 12, background: "rgba(255,255,255,.2)", color: "#fff", backdropFilter: "blur(4px)" }}>{c.category}</span>
-                  {pct >= 80 && <span style={{ position: "absolute", top: 12, right: 12, background: B.success, color: "#fff", borderRadius: 6, padding: "3px 8px", fontSize: 10, fontWeight: 800 }}>CERTIFIED</span>}
+                  {pct >= 100 && cMods.length > 0 && <span style={{ position: "absolute", top: 12, right: 12, background: B.success, color: "#fff", borderRadius: 6, padding: "3px 8px", fontSize: 10, fontWeight: 800 }}>CERTIFIED</span>}
                 </div>
                 <div style={{ padding: 20 }}>
                   <h3 style={{ fontWeight: 700, fontSize: 15, marginBottom: 6, color: "var(--text)" }}>{c.title}</h3>
+                  {/* Only advertise a syllabus that actually exists. */}
                   <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 14, display: "flex", gap: 14, flexWrap: "wrap" }}>
-                    <span>📦 {cMods.length} modules</span><span>📚 {cTopics} topics</span><span>⏱ {c.duration}</span>
+                    {cMods.length > 0
+                      ? <><span>📦 {cMods.length} module{cMods.length === 1 ? "" : "s"}</span><span>📚 {cTopics} topic{cTopics === 1 ? "" : "s"}</span></>
+                      : <span>Lessons coming soon</span>}
                   </div>
                   <ProgressBar value={pct} height={6} showLabel />
                 </div>
@@ -3113,7 +3070,7 @@ const StudentQuizPage = () => {
   const answersRef = useRef(answers);
   answersRef.current = answers;
 
-  // Timer for active quiz — uses the admin-set time limit, else 60s per question.
+  // Timer for the active quiz — only when the admin set a real time limit.
   useEffect(() => {
     if (!active || submitted) return;
     // Only run a countdown when the admin actually set a limit. Previously an
