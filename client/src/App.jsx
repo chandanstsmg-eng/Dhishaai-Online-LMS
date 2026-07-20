@@ -927,17 +927,24 @@ const EmptyState = ({ icon, title, desc, action }) => (
 // www.dhishaai.com. Only add entries here that a real student actually said —
 // never invent a quote, a job title, or an employer.
 const TESTIMONIALS = [
-  { name: "Tushar Pagar",           text: "Great learning experience!" },
-  { name: "Raja Shekar",            text: "The trainers are very knowledgeable." },
-  { name: "Aravinda P K",           text: "Hands-on projects helped me a lot." },
-  { name: "Vinay Prasad",           text: "I got placed in a top company!" },
-  { name: "Prathibha Rejeev",       text: "I loved the interactive sessions." },
-  { name: "Ananya Bangre",          text: "The placement assistance was great." },
-  { name: "Mamatha Nellamakkada",   text: "I learned a lot in a short time." },
-  { name: "Sowmya .D",              text: "The curriculum is industry-relevant." },
-  { name: "Punya Mallik",           text: "I highly recommend this institute." },
-  { name: "Pruthvik S N",           text: "The course material is excellent." },
-  { name: "Jeevan",                 text: "The Teaching is good" },
+  { name: "Tushar Pagar",     text: "Great learning experience!" },
+  { name: "Raja Shekar",      text: "The trainers are very knowledgeable." },
+  { name: "Aravinda P K",     text: "Hands-on projects helped me a lot." },
+  { name: "Vinay Prasad",     text: "I got placed in a top company!" },
+  { name: "Prathibha Rejeev", text: "I loved the interactive sessions." },
+  { name: "Ananya Bangre",    text: "The placement assistance was great." },
+];
+
+// The courses DhishaAI offers, used ONLY as a fallback when the live catalogue
+// can't be reached (e.g. the server hasn't been restarted since this build).
+// The live list from /api/public/stats always wins, so a course added by an
+// admin shows up automatically. Keep this in step if the catalogue changes.
+const FALLBACK_COURSES = [
+  { id: "f1", title: "Python for Data Analytics", category: "Python", color: "#4F46E5", description: "Master Python from basics to advanced data analysis using Pandas, NumPy and Matplotlib." },
+  { id: "f2", title: "SQL for Data Analysis",     category: "SQL",    color: "#0EA5E9", description: "Write powerful SQL queries to extract, transform and analyse data from relational databases." },
+  { id: "f3", title: "Power BI Masterclass",      category: "BI",     color: "#F59E0B", description: "Build stunning interactive dashboards and business intelligence reports in Power BI." },
+  { id: "f4", title: "Machine Learning Basics",   category: "ML",     color: "#10B981", description: "Understand supervised and unsupervised ML algorithms and build your first models." },
+  { id: "f5", title: "Excel for Analytics",       category: "Excel",  color: "#EC4899", description: "Master Excel formulas, pivot tables, and charts for professional data reporting." },
 ];
 
 const LandingPage = ({ onGetStarted }) => {
@@ -971,7 +978,10 @@ const LandingPage = ({ onGetStarted }) => {
     [String(pub.instructors), pub.instructors === 1 ? "Instructor" : "Instructors"],
     ...(pub.aiEnabled ? [["24/7", "AI Tutor"]] : []),
   ] : [];
-  const courses = pub?.courseList || [];
+  // Live catalogue when we can reach it; otherwise the known course list, so a
+  // visitor always sees what we actually offer.
+  const courses = (pub?.courseList?.length ? pub.courseList : FALLBACK_COURSES);
+  const usingFallback = !pub?.courseList?.length;
 
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(160deg,#0D2137 0%,#17406E 55%,#1a4d8a 100%)", overflowX: "hidden" }}>
@@ -1046,30 +1056,15 @@ const LandingPage = ({ onGetStarted }) => {
         <div style={{ textAlign: "center", marginBottom: 36 }}>
           <h2 style={{ fontSize: "clamp(22px,3vw,34px)", fontWeight: 800, color: "#fff", marginBottom: 10 }}>Our Courses</h2>
           <p style={{ color: "rgba(255,255,255,.55)" }}>
-            {courses.length > 0
-              ? `${courses.length} course${courses.length === 1 ? "" : "s"} across ${pub.categories} subject track${pub.categories === 1 ? "" : "s"} — taught by our instructors`
-              : "Practical, industry-aligned training in data analytics"}
+            {usingFallback
+              ? "Practical, industry-aligned training in data analytics"
+              : `${courses.length} course${courses.length === 1 ? "" : "s"} across ${pub.categories} subject track${pub.categories === 1 ? "" : "s"} — taught by our instructors`}
           </p>
         </div>
 
-        {pubState === "loading" && (
-          <div style={{ textAlign: "center", padding: 40 }}><Spinner size={28} color={B.orange} /></div>
-        )}
-
-        {pubState === "unavailable" && (
-          <div style={{ textAlign: "center", padding: 32, color: "rgba(255,255,255,.6)", background: "rgba(255,255,255,.05)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 16 }}>
-            Our course list is taking a moment to load. <button onClick={onGetStarted} style={{ background: "none", border: "none", color: B.orange, fontWeight: 700, cursor: "pointer", fontSize: "inherit", textDecoration: "underline" }}>Sign in</button> to see everything you're enrolled in.
-          </div>
-        )}
-
-        {pubState === "ready" && courses.length === 0 && (
-          <div style={{ textAlign: "center", padding: 32, color: "rgba(255,255,255,.6)", background: "rgba(255,255,255,.05)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 16 }}>
-            New courses are being prepared — check back soon.
-          </div>
-        )}
-
-        {pubState === "ready" && courses.length > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 20 }}>
+        {/* The catalogue always renders — visitors must be able to see what we
+            offer even if the live list can't be fetched. */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 20 }}>
             {courses.map(c => (
               <div key={c.id} onClick={onGetStarted} title={`Sign in to start ${c.title}`}
                 style={{ background: "rgba(255,255,255,.06)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 16, overflow: "hidden", cursor: "pointer", display: "flex", flexDirection: "column" }}>
@@ -1084,17 +1079,13 @@ const LandingPage = ({ onGetStarted }) => {
                   {c.description && (
                     <p style={{ color: "rgba(255,255,255,.6)", fontSize: 12.5, lineHeight: 1.6, marginBottom: 12, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{c.description}</p>
                   )}
-                  <div style={{ marginTop: "auto", display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11.5, color: "rgba(255,255,255,.5)" }}>
-                    {c.instructor && <span>👩‍🏫 {c.instructor}</span>}
-                    {c.duration && <span>⏱ {c.duration}</span>}
-                    {/* Only claim modules that are actually published. */}
-                    {c.modules > 0 && <span>📦 {c.modules} module{c.modules === 1 ? "" : "s"}</span>}
-                  </div>
+                  {/* Instructor names and course hours are deliberately NOT shown
+                      publicly — staff names stay internal, and durations are set
+                      per batch. Students see those once signed in. */}
                 </div>
               </div>
             ))}
-          </div>
-        )}
+        </div>
 
         <div style={{ textAlign: "center", marginTop: 28 }}>
           <button className="btn btn-primary" onClick={onGetStarted}>Sign in to start learning →</button>

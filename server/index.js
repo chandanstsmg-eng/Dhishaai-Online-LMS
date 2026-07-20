@@ -689,22 +689,16 @@ app.get('/api/public/stats', (req, res) => {
     categories: categories.length,
     instructors: DB.admins.length,
     aiEnabled: ai.aiAvailable(),
-    // Everything a visitor needs to see what is on offer, without logging in.
-    courseList: DB.courses.map(c => {
-      const owner = DB.admins.find(a => a.id === c.ownerId);
-      return {
-        id: c.id,
-        title: c.title,
-        category: c.category || '',
-        color: c.color || '#4F46E5',
-        description: c.description || '',
-        duration: c.duration || '',
-        instructor: owner?.name || '',
-        // How many modules are actually published, so the page never implies
-        // content that does not exist.
-        modules: Array.isArray(c.modules) ? c.modules.length : 0,
-      };
-    }),
+    // Only what a visitor needs to see what is on offer. Staff names and course
+    // hours are deliberately withheld from this public endpoint — they are
+    // internal, and are shown to students after they sign in.
+    courseList: DB.courses.map(c => ({
+      id: c.id,
+      title: c.title,
+      category: c.category || '',
+      color: c.color || '#4F46E5',
+      description: c.description || '',
+    })),
   });
 });
 
