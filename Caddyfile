@@ -1,0 +1,65 @@
+# ─── DhishaAI LMS — HTTPS front door ──────────────────────────────────────────
+#
+# Caddy sits in front of the Node app and gives you:
+#   • a free HTTPS certificate, obtained and renewed automatically
+#   • an automatic redirect from http:// to https://
+#   • compression, and the real visitor IP passed through to the app
+#
+# The Node app keeps listening on 127.0.0.1:9000 and is NOT exposed directly.
+#
+# ── Before you start ──────────────────────────────────────────────────────────
+#   1. Replace lms.yourcompany.com below with your real domain.
+#   2. Point that domain's DNS A record at this server's PUBLIC IP address.
+#   3. Open TCP 80 and 443 on the Windows firewall and on the office router
+#      (port-forward both to this server). Port 80 must stay reachable —
+#      Caddy uses it to prove domain ownership when issuing the certificate.
+#   4. In server\.env set:
+#         PORT=9000
+#         TRUST_PROXY=true
+#         CORS_ORIGIN=https://lms.yourcompany.com
+#
+# ── Run it ────────────────────────────────────────────────────────────────────
+#   caddy run --config Caddyfile          (foreground, good for the first test)
+#   caddy start --config Caddyfile        (background)
+#   To run on boot, install Caddy as a Windows service — see
+#   DEPLOY-PUBLIC-DOMAIN.md.
+
+lms.yourcompany.com {
+	# Send everything to the Node app.
+	reverse_proxy 127.0.0.1:9000
+
+	encode gzip zstd
+
+	header {
+		# Force HTTPS for a year on future visits.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# Don't let the site be framed by another site (clickjacking).
+		X-Frame-Options "SAMEORIGIN"
+		# Don't let browsers second-guess declared content types.
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Hide the server banner.
+		-Server
+	}
+
+	# Uploaded lesson videos are large; allow generous upload/streaming timeouts.
+	request_body {
+		max_size 200MB
+	}
+
+	log {
+		output file access.log {
+			roll_size 10MB
+			roll_keep 5
+		}
+	}
+}
+
+# ── Local testing without a real domain ───────────────────────────────────────
+# Uncomment this block to try the proxy on the server itself. Caddy issues a
+# local self-signed certificate, so the browser will warn once — that is
+# expected and does NOT happen with the real domain above.
+#
+# localhost {
+# 	reverse_proxy 127.0.0.1:9000
+# }

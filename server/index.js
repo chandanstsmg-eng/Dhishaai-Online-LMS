@@ -34,7 +34,15 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dhishaai-lms-secret-v3-2025';
 const DB_PATH    = path.join(__dirname, 'dhishaai_lms.json');
 const CLIENT_DIST = path.join(__dirname, '../client/dist');
 
-app.use(cors({ origin: '*', credentials: true }));
+// Behind Caddy/Nginx the client's real IP arrives in X-Forwarded-For. Without
+// this, every request looks like it comes from the proxy and rate limiting would
+// throttle all users as one. Enable it ONLY when actually behind a proxy.
+if (String(process.env.TRUST_PROXY || 'false').toLowerCase() === 'true') app.set('trust proxy', 1);
+
+// The frontend is served from this same origin, so CORS is not needed for the
+// app itself. Set CORS_ORIGIN to your domain on a public deployment to stop
+// other sites scripting against the API.
+app.use(cors({ origin: process.env.CORS_ORIGIN || '*', credentials: true }));
 app.use(express.json({ limit: '80mb' }));   // large enough for gallery video uploads (base64)
 app.use(express.urlencoded({ limit: '80mb', extended: true }));
 
@@ -156,6 +164,38 @@ function saveDB() {
     fs.renameSync(tmp, DB_PATH);
   } catch (e) { console.error('DB save error:', e.message); }
 }
+
+// ─── RATE LIMITING ───────────────────────────────────────────────────────────
+// Small in-memory limiter (no extra dependency). It exists because the login and
+// signup endpoints are reachable from the public internet once the site is on a
+// domain: without it, an attacker can guess passwords indefinitely and bots can
+// create unlimited accounts. Counters are per-IP and reset on restart, which is
+// fine for a single-server deployment.
+const _hits = new Map();
+setInterval(() => { // drop expired buckets so the map can't grow forever
+  const now = Date.now();
+  for (const [k, v] of _hits) if (v.resetAt <= now) _hits.delete(k);
+}, 60_000).unref?.();
+
+function rateLimit({ windowMs, max, message }) {
+  return (req, res, next) => {
+    const key = `${req.path}|${req.ip}`;
+    const now = Date.now();
+    let b = _hits.get(key);
+    if (!b || b.resetAt <= now) { b = { count: 0, resetAt: now + windowMs }; _hits.set(key, b); }
+    b.count++;
+    if (b.count > max) {
+      res.set('Retry-After', String(Math.ceil((b.resetAt - now) / 1000)));
+      return res.status(429).json({ error: message || 'Too many attempts. Please wait a moment and try again.' });
+    }
+    next();
+  };
+}
+
+// Brute-force protection on credentials; generous enough that a real person
+// mistyping their password a few times is never affected.
+const loginLimiter    = rateLimit({ windowMs: 15 * 60_000, max: 20, message: 'Too many login attempts. Please wait a few minutes and try again.' });
+const registerLimiter = rateLimit({ windowMs: 60 * 60_000, max: 5,  message: 'Too many accounts created from this network. Please try again later.' });
 
 // ─── STUDENT ACTIVITY ────────────────────────────────────────────────────────
 // Real engagement is recorded once per student per calendar day. Everything the
@@ -432,7 +472,11 @@ function livePercent(course, prog) {
   // Untagged course quizzes still count towards completion — once each, rather
   // than being dropped or attributed to a module the admin never chose.
   untagged.forEach(q => { total++; if (passed(q)) dn++; });
-  if (total === 0) return clamp(prog && prog.percent);
+  // A course with nothing to complete is 0%, not whatever number happens to be
+  // stored. Those stored figures came from the old fabricated syllabus — a
+  // student could show "100%" on a course that has never had any content, which
+  // is misleading for them and for every report an admin reads.
+  if (total === 0) return 0;
   // Floor, not round: 99.5% must not display as a finished 100%.
   return Math.max(0, Math.min(100, Math.floor((dn / total) * 100)));
 }
@@ -703,7 +747,7 @@ app.get('/api/public/stats', (req, res) => {
 });
 
 // ── AUTH ──────────────────────────────────────────────────────────────────────
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', loginLimiter, (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
   const user = DB.users.find(u => u.email.toLowerCase() === email.toLowerCase());
@@ -749,9 +793,17 @@ app.get('/api/auth/me', auth, (req, res) => {
   res.json({ id: user.id, name: user.name, email: user.email, role: user.role, studentId: student?.id || null, adminId: adminRec?.id || null, subject: adminRec?.subject || null, subjects: adminRec?.subjects || (adminRec?.subject ? [adminRec.subject] : []), authorityId: authRec?.id || null, batchIds: authRec?.batchIds || [] });
 });
 
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', registerLimiter, (req, res) => {
   const { name, email, password } = req.body;
   if (!name || !email || !password) return res.status(400).json({ error: 'All fields required' });
+  // Public sign-up can be switched off when students are created by an admin
+  // instead — set ALLOW_PUBLIC_SIGNUP=false in .env.
+  if (String(process.env.ALLOW_PUBLIC_SIGNUP || 'true').toLowerCase() === 'false')
+    return res.status(403).json({ error: 'Public sign-up is disabled. Please ask your administrator for an account.' });
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(email)))
+    return res.status(400).json({ error: 'Please enter a valid email address' });
+  if (String(password).length < 8)
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
   if (DB.users.find(u => u.email.toLowerCase() === email.toLowerCase())) return res.status(409).json({ error: 'Email already registered' });
   const uid = uuidv4();
   DB.users.push({ id: uid, email, password: bcrypt.hashSync(password, 10), role: 'student', name, createdAt: new Date().toISOString() });
@@ -1695,12 +1747,9 @@ app.put('/api/progress', auth, (req, res) => {
   // Completion is DERIVED from real units whenever the course has any. Only a
   // course with nothing authored in it falls back to the client's figure, and
   // such a course can never be certified (see `certifiable` in /api/profile).
-  if (hasCompletableUnits(course)) {
-    prog.percent = livePercent(course, prog);
-  } else {
-    const n = Number(percent);
-    prog.percent = Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : (Number(prog.percent) || 0);
-  }
+  // Completion is always derived from real units. A course with no content
+  // stays at 0 — a client-supplied number is never trusted.
+  prog.percent = livePercent(course, prog);
 
   // +10 XP per lesson, paid ONCE per lesson for good. Re-ticking a lesson (or
   // replaying the request) earns nothing, so XP can't be farmed by clicking.
