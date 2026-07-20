@@ -81,6 +81,7 @@ let DB = {
   projects: [],     // { id, title, topic, description, assignType:'student'|'batch', studentId, batchId, courseId, maxMarks, adminId, adminName, createdAt, submissions:[{ studentId, studentName, link, note, submittedAt, marks, feedback, gradedAt, xpAwarded }] }
   group_sessions: [], // { id, hostId, hostName, courseId, topic, date, time, duration, note, createdAt, joiners:[{studentId, studentName}] } — student-run group study sessions
   lesson_videos: [],  // { id, courseId, moduleIndex, title, description, videoUrl, visible, order, adminId, adminName, createdAt } — admin-added recorded video lessons
+  activity: [],     // { id:'<studentId>|<YYYY-MM-DD>', studentId, date, count, lastAt } — one row per student per day, drives the Weekly Activity chart and the streak
 };
 
 async function loadDB() {
@@ -153,6 +154,60 @@ function saveDB() {
     fs.writeFileSync(tmp, JSON.stringify(DB, null, 2));
     fs.renameSync(tmp, DB_PATH);
   } catch (e) { console.error('DB save error:', e.message); }
+}
+
+// ─── STUDENT ACTIVITY ────────────────────────────────────────────────────────
+// Real engagement is recorded once per student per calendar day. Everything the
+// UI shows about "activity" (the Weekly Activity chart, the 🔥 streak, and the
+// admin "Active students" count) is derived from these rows — never invented.
+
+/** Local calendar day as YYYY-MM-DD (server timezone). */
+function dayKey(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Streak = consecutive days with activity, counting back from today. If the
+ * student hasn't done anything YET today we start from yesterday, so a streak
+ * isn't lost just because they haven't logged in yet this morning.
+ */
+function recomputeStreak(studentId) {
+  const days = new Set((DB.activity || []).filter(a => a.studentId === studentId).map(a => a.date));
+  const cursor = new Date(); cursor.setHours(0, 0, 0, 0);
+  if (!days.has(dayKey(cursor))) cursor.setDate(cursor.getDate() - 1);
+  let streak = 0;
+  while (days.has(dayKey(cursor))) { streak++; cursor.setDate(cursor.getDate() - 1); }
+  const sidx = DB.students.findIndex(s => s.id === studentId);
+  if (sidx >= 0) DB.students[sidx].streak = streak;
+  return streak;
+}
+
+/** Record one genuine engagement event (lesson progress, material read, quiz, login). */
+function recordActivity(studentId, weight = 1) {
+  if (studentId === undefined || studentId === null) return;
+  if (!Array.isArray(DB.activity)) DB.activity = [];
+  const date = dayKey();
+  const id = `${studentId}|${date}`;
+  const row = DB.activity.find(a => a.id === id);
+  if (row) { row.count += weight; row.lastAt = new Date().toISOString(); }
+  else DB.activity.push({ id, studentId, date, count: weight, lastAt: new Date().toISOString() });
+  recomputeStreak(studentId);
+  saveDB();
+}
+
+/** Mon→Sun of the current week with real per-day counts (0 for days with none). */
+function weekActivityFor(studentId) {
+  const names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - ((today.getDay() + 6) % 7)); // getDay(): Sun=0 → Mon=0..Sun=6
+  const rows = (DB.activity || []).filter(a => a.studentId === studentId);
+  return names.map((day, i) => {
+    const d = new Date(monday); d.setDate(monday.getDate() + i);
+    const key = dayKey(d);
+    const row = rows.find(a => a.date === key);
+    return { day, date: key, count: row ? row.count : 0, future: d.getTime() > today.getTime() };
+  });
 }
 
 // Force any pending debounced write out immediately (used on shutdown). Awaits the
@@ -341,6 +396,47 @@ function livePercent(course, prog) {
   return clamp((dn / total) * 100);
 }
 
+/**
+ * True when a course actually has something completable (authored topics,
+ * materials, or quizzes). Courses with nothing in them cannot be "completed",
+ * so they must never produce a certificate.
+ */
+function hasCompletableUnits(course) {
+  if (!course || !Array.isArray(course.modules) || course.modules.length === 0) return false;
+  const topics = course.modules.reduce((a, m) => a + ((m.topics || []).length), 0);
+  const mats = (DB.materials || []).filter(m => Number(m.courseId) === course.id).length;
+  const quizzes = (DB.quizzes || []).filter(q => q.courseId === course.id).length;
+  return (topics + mats + quizzes) > 0;
+}
+
+/**
+ * Repair any counter that a past bug left non-numeric (e.g. XP poisoned to NaN
+ * by a zero-question quiz). NaN spreads: it breaks leaderboard sorting and every
+ * average it touches, so it is scrubbed once at startup.
+ */
+/**
+ * Mean quiz score as a whole percent. Rows with a zero/missing `total` are
+ * unscoreable and are EXCLUDED rather than divided by — one such legacy row
+ * would otherwise turn every dashboard average into NaN.
+ */
+function avgQuizPercent(results) {
+  const scorable = (results || []).filter(r => Number(r.total) > 0);
+  if (!scorable.length) return 0;
+  return Math.round(scorable.reduce((a, r) => a + (Number(r.score) / Number(r.total)) * 100, 0) / scorable.length);
+}
+
+function sanitizeStudentCounters() {
+  let fixed = 0;
+  DB.students.forEach(s => {
+    for (const f of ['xp', 'streak', 'badges']) {
+      const n = Number(s[f]);
+      if (!Number.isFinite(n) || n < 0) { s[f] = 0; fixed++; }
+      else if (s[f] !== n) { s[f] = n; fixed++; }
+    }
+  });
+  if (fixed) { console.log(`🩹 Repaired ${fixed} corrupted student counter(s).`); saveDB(); }
+}
+
 /** Build a rich, read-only report object for a student (used by authority views) */
 function studentReport(s) {
   const enrolled = DB.enrollments.filter(e => e.studentId === s.id).map(e => e.courseId);
@@ -354,7 +450,8 @@ function studentReport(s) {
     const quiz = DB.quizzes.find(q => q.id === r.quizId);
     return { quizTitle: quiz?.title || 'Quiz', score: r.score, total: r.total, pct: r.total ? Math.round(r.score / r.total * 100) : 0, completedAt: r.completedAt };
   });
-  const quizAvg = results.length ? Math.round(results.reduce((a, r) => a + r.pct, 0) / results.length) : 0;
+  // Unscoreable rows (total 0) are excluded, not counted as a 0% attempt.
+  const quizAvg = avgQuizPercent(results);
   const batch = DB.batches.find(b => b.id === s.batchId);
   const lastActivity = DB.progress.filter(p => p.studentId === s.id).map(p => p.lastActivity).filter(Boolean).sort().reverse()[0] || null;
   return {
@@ -457,6 +554,7 @@ app.post('/api/auth/login', (req, res) => {
 
   const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
   const student = user.role === 'student' ? DB.students.find(s => s.userId === user.id) : null;
+  if (student) recordActivity(student.id); // showing up counts — keeps the daily streak honest
   const adminRec = (user.role === 'admin') ? getAdminRecord(user.id) : null;
   const authRec  = (user.role === 'authority') ? getAuthorityRecord(user.id) : null;
 
@@ -641,7 +739,7 @@ app.get('/api/super/analytics', auth, superOnly, (req, res) => {
     totalCourses:   DB.courses.length,
     totalQuizzes:   DB.quizzes.length,
     totalAttempts:  DB.quiz_results.length,
-    avgScore:       DB.quiz_results.length > 0 ? Math.round(DB.quiz_results.reduce((a,r)=>a+(r.score/r.total*100),0)/DB.quiz_results.length) : 0,
+    avgScore:       avgQuizPercent(DB.quiz_results),
     adminBreakdown: DB.admins.map(a => ({
       name:         a.name,
       subject:      a.subject,
@@ -1266,6 +1364,9 @@ app.post('/api/quizzes', auth, adminOrSuper, (req, res) => {
     const adminRec = getAdminRecord(req.user.id);
     if (!adminCourseIds(adminRec?.id).includes(courseId)) return res.status(403).json({ error: 'Not your course' });
   }
+  // An empty quiz is unscoreable (0/0) and would corrupt XP — reject it up front.
+  if (!Array.isArray(questions) || questions.length === 0)
+    return res.status(400).json({ error: 'Add at least one question before saving this quiz' });
   const id = (DB.quizzes.length > 0 ? Math.max(...DB.quizzes.map(q=>q.id)) : 0) + 1;
   const tl = (timeLimit === undefined || timeLimit === null || timeLimit === '') ? null : Number(timeLimit);
   const quiz = { id, courseId, title: title||'New Quiz', questions: questions||[], moduleIndex: (moduleIndex === undefined ? null : moduleIndex), timeLimit: (tl && tl > 0) ? tl : null, createdAt: new Date().toISOString() };
@@ -1282,6 +1383,8 @@ app.put('/api/quizzes/:id', auth, adminOrSuper, (req, res) => {
     const adminRec = getAdminRecord(req.user.id);
     if (!adminCourseIds(adminRec?.id).includes(DB.quizzes[idx].courseId)) return res.status(403).json({ error: 'Not your quiz' });
   }
+  if (req.body.questions !== undefined && (!Array.isArray(req.body.questions) || req.body.questions.length === 0))
+    return res.status(400).json({ error: 'A quiz must keep at least one question' });
   DB.quizzes[idx] = { ...DB.quizzes[idx], ...req.body, id };
   // Normalize the time limit (blank/0 => no limit)
   const tl = Number(DB.quizzes[idx].timeLimit);
@@ -1304,15 +1407,41 @@ app.delete('/api/quizzes/:id', auth, adminOrSuper, (req, res) => {
 });
 
 // ── QUIZ RESULTS ──────────────────────────────────────────────────────────────
+// The score is graded HERE, from the stored answer key. Anything the browser
+// claims about score/total is ignored — a student cannot declare their own mark.
 app.post('/api/quiz-results', auth, (req, res) => {
-  const { quizId, courseId, score, total, answers } = req.body;
+  const { quizId, answers } = req.body;
   const student = DB.students.find(s => s.userId === req.user.id);
   if (!student) return res.status(400).json({ error: 'Student not found' });
-  const result = { id: uuidv4(), studentId: student.id, quizId, courseId, score, total, answers, completedAt: new Date().toISOString() };
+
+  const quiz = DB.quizzes.find(q => q.id === quizId);
+  if (!quiz) return res.status(404).json({ error: 'Quiz not found' });
+  const cid = quiz.courseId;
+  if (!DB.enrollments.some(e => e.studentId === student.id && e.courseId === cid))
+    return res.status(403).json({ error: 'Not enrolled in this course' });
+
+  const questions = Array.isArray(quiz.questions) ? quiz.questions : [];
+  // A quiz with no questions can't be scored (0/0 = NaN, which would poison XP,
+  // the leaderboard sort, and every average built on it).
+  if (questions.length === 0) return res.status(400).json({ error: 'This quiz has no questions yet' });
+
+  const picks = (answers && typeof answers === 'object') ? answers : {};
+  let score = 0;
+  questions.forEach(q => { if (String(picks[q.id]) === String(q.ans)) score++; });
+  const total = questions.length;
+  const pct = Math.round((score / total) * 100);
+
+  // XP is idempotent per quiz: a retake pays only the improvement over what this
+  // quiz has already paid out, so replaying it can never farm unlimited XP.
+  const prior = DB.quiz_results.filter(r => r.studentId === student.id && r.quizId === quiz.id);
+  const alreadyAwarded = prior.reduce((a, r) => a + (Number(r.xpAwarded) || 0), 0);
+  const xpGain = Math.max(0, pct - alreadyAwarded);
+
+  const result = { id: uuidv4(), studentId: student.id, quizId: quiz.id, courseId: cid, score, total, answers: picks, completedAt: new Date().toISOString(), xpAwarded: xpGain };
   DB.quiz_results.push(result);
-  const xpGain = Math.round((score/total)*100);
   const sidx = DB.students.findIndex(s => s.id === student.id);
-  if (sidx >= 0) DB.students[sidx].xp += xpGain;
+  if (sidx >= 0) DB.students[sidx].xp = Math.max(0, (Number(DB.students[sidx].xp) || 0) + xpGain);
+  recordActivity(student.id, 2); // finishing a quiz is a strong engagement signal
   saveDB();
   res.status(201).json({ ...result, xpGained: xpGain });
 });
@@ -1338,18 +1467,48 @@ app.put('/api/progress', auth, (req, res) => {
   const { courseId, percent, completedLessons } = req.body;
   const student = DB.students.find(s => s.userId === req.user.id);
   if (!student) return res.status(400).json({ error: 'Student not found' });
-  const idx = DB.progress.findIndex(p => p.studentId === student.id && p.courseId === courseId);
-  if (idx >= 0) {
-    DB.progress[idx].percent = percent;
-    if (completedLessons !== undefined) DB.progress[idx].completedLessons = completedLessons;
-    DB.progress[idx].lastActivity = new Date().toISOString();
-  } else {
-    DB.progress.push({ id: uuidv4(), studentId: student.id, courseId, percent, completedLessons: completedLessons || [], lastActivity: new Date().toISOString() });
+  const cid = Number(courseId);
+  if (!Number.isFinite(cid)) return res.status(400).json({ error: 'Invalid courseId' });
+  // A student may only record progress on a course they are actually enrolled in.
+  if (!DB.enrollments.some(e => e.studentId === student.id && e.courseId === cid))
+    return res.status(403).json({ error: 'Not enrolled in this course' });
+  const course = DB.courses.find(c => c.id === cid);
+
+  let idx = DB.progress.findIndex(p => p.studentId === student.id && p.courseId === cid);
+  if (idx < 0) {
+    DB.progress.push({ id: uuidv4(), studentId: student.id, courseId: cid, percent: 0, completedLessons: [], viewedMaterials: [], lastActivity: new Date().toISOString() });
+    idx = DB.progress.length - 1;
   }
-  const sidx = DB.students.findIndex(s => s.id === student.id);
-  if (sidx >= 0) DB.students[sidx].xp += 10;
+  const prog = DB.progress[idx];
+  if (completedLessons !== undefined) {
+    prog.completedLessons = Array.isArray(completedLessons)
+      ? [...new Set(completedLessons.map(Number).filter(Number.isFinite))]
+      : [];
+  }
+  prog.lastActivity = new Date().toISOString();
+
+  // Completion is DERIVED from real units whenever the course has any. Only a
+  // course with nothing authored in it falls back to the client's figure, and
+  // such a course can never be certified (see `certifiable` in /api/profile).
+  if (hasCompletableUnits(course)) {
+    prog.percent = livePercent(course, prog);
+  } else {
+    const n = Number(percent);
+    prog.percent = Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : (Number(prog.percent) || 0);
+  }
+
+  // +10 XP per lesson, paid ONCE per lesson for good. Re-ticking a lesson (or
+  // replaying the request) earns nothing, so XP can't be farmed by clicking.
+  if (!Array.isArray(prog.xpLessons)) prog.xpLessons = [];
+  const newlyPaid = (prog.completedLessons || []).filter(l => !prog.xpLessons.includes(l));
+  if (newlyPaid.length) {
+    prog.xpLessons = [...prog.xpLessons, ...newlyPaid];
+    const sidx = DB.students.findIndex(s => s.id === student.id);
+    if (sidx >= 0) DB.students[sidx].xp = Math.max(0, (Number(DB.students[sidx].xp) || 0) + newlyPaid.length * 10);
+  }
+  recordActivity(student.id);
   saveDB();
-  res.json({ success: true });
+  res.json({ success: true, percent: prog.percent, xpGained: newlyPaid.length * 10 });
 });
 
 // Record that a student has read a study material (PDF) all the way to the last
@@ -1374,6 +1533,7 @@ app.post('/api/progress/material-viewed', auth, (req, res) => {
   if (!prog.viewedMaterials.some(v => String(v) === String(materialId))) {
     prog.viewedMaterials.push(materialId);
     prog.lastActivity = new Date().toISOString();
+    recordActivity(student.id);
     saveDB();
   }
   res.json({ success: true, viewedMaterials: prog.viewedMaterials });
@@ -1388,7 +1548,7 @@ app.get('/api/analytics/overview', auth, adminOrSuper, (req, res) => {
       totalCourses:  DB.courses.length,
       totalQuizzes:  DB.quizzes.length,
       totalAttempts: DB.quiz_results.length,
-      avgScore:      DB.quiz_results.length > 0 ? Math.round(DB.quiz_results.reduce((a,r)=>a+(r.score/r.total*100),0)/DB.quiz_results.length) : 0,
+      avgScore:      avgQuizPercent(DB.quiz_results),
       activeStudents: DB.students.filter(s=>s.streak>0).length,
       progressByStudent: DB.students.map(s=>({ name:s.name, xp:s.xp, progress: DB.progress.filter(p=>p.studentId===s.id).reduce((a,p)=>a+p.percent,0)/Math.max(1,DB.enrollments.filter(e=>e.studentId===s.id).length) })),
       quizResults: DB.quiz_results,
@@ -1407,7 +1567,7 @@ app.get('/api/analytics/overview', auth, adminOrSuper, (req, res) => {
     totalCourses:   myCourseIds.length,
     totalQuizzes:   DB.quizzes.filter(q => myCourseIds.includes(q.courseId)).length,
     totalAttempts:  myResults.length,
-    avgScore:       myResults.length > 0 ? Math.round(myResults.reduce((a,r)=>a+(r.score/r.total*100),0)/myResults.length) : 0,
+    avgScore:       avgQuizPercent(myResults),
     activeStudents: myStudents.filter(s=>s.streak>0).length,
     progressByStudent: myStudents.map(s=>({ name:s.name, xp:s.xp, progress: DB.progress.filter(p=>p.studentId===s.id && myCourseIds.includes(p.courseId)).reduce((a,p)=>a+p.percent,0)/Math.max(1,myCourseIds.length) })),
     quizResults: myResults,
@@ -1514,11 +1674,17 @@ app.get('/api/profile', auth, (req, res) => {
   if (!student) return res.status(404).json({ error: 'Not found' });
   const enrolled = DB.enrollments.filter(e => e.studentId === student.id).map(e => e.courseId);
   // Live completion: recompute each course's percent from actually-completed topics.
+  // `certifiable` marks progress the server can actually vouch for: a course
+  // with real authored content. A course with nothing in it can show progress
+  // but must never yield a certificate.
   const progress = DB.progress.filter(p => p.studentId === student.id)
-    .map(p => ({ ...p, percent: livePercent(DB.courses.find(c => c.id === p.courseId), p) }));
+    .map(p => {
+      const c = DB.courses.find(x => x.id === p.courseId);
+      return { ...p, percent: livePercent(c, p), certifiable: hasCompletableUnits(c) };
+    });
   const results  = DB.quiz_results.filter(r => r.studentId === student.id);
   const batch    = DB.batches.find(b => b.id === student.batchId);
-  res.json({ ...student, batchName: batch?.name || student.batchId || null, enrolledCourses: enrolled, progress, quizResults: results });
+  res.json({ ...student, batchName: batch?.name || student.batchId || null, enrolledCourses: enrolled, progress, quizResults: results, weekActivity: weekActivityFor(student.id) });
 });
 
 app.put('/api/profile', auth, (req, res) => {
@@ -2348,7 +2514,7 @@ function startServer() {
 // can't be reached at all, we still start so the operator sees the error and the
 // health endpoint responds, rather than the process dying silently.
 loadDB()
-  .then(startServer)
+  .then(() => { sanitizeStudentCounters(); startServer(); })
   .catch(err => { console.error('❌ Startup failed:', err); startServer(); });
 
 // Flush any pending debounced write out on shutdown so no data is lost. Awaits the

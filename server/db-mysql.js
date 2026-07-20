@@ -34,7 +34,7 @@ const COLLECTIONS = [
   'users', 'admins', 'courses', 'students', 'enrollments', 'quizzes',
   'quiz_results', 'progress', 'notifications', 'assignments', 'materials',
   'topics', 'forum_posts', 'batches', 'authorities', 'enroll_requests',
-  'projects', 'group_sessions', 'lesson_videos',
+  'projects', 'group_sessions', 'lesson_videos', 'activity',
 ];
 
 let pool = null;

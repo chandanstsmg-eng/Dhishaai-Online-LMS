@@ -2493,7 +2493,7 @@ const StudentDashboard = ({ user, studentId, onOpenCourse }) => {
       <div className="stat-grid" style={{ marginBottom: 16 }}>
         <StatCard label="Enrolled Courses" value={profile?.enrolledCourses?.length || 0} icon="book" color="#4F46E5" />
         <StatCard label="Quizzes Completed" value={profile?.quizResults?.length || 0} icon="quiz" color="#10B981" />
-        <StatCard label="Certificates" value={profile?.progress?.filter(p => p.percent >= 80).length || 0} icon="cert" color="#F59E0B" />
+        <StatCard label="Certificates" value={profile?.progress?.filter(p => p.percent >= 80 && p.certifiable).length || 0} icon="cert" color="#F59E0B" />
       </div>
 
       {/* Explore / request enrollment */}
@@ -3479,7 +3479,7 @@ const ProgressPage = () => {
                   <span style={{ fontWeight: 700, color: p.percent >= 80 ? B.success : B.orange, fontSize: 14 }}>{p.percent}%</span>
                 </div>
                 <ProgressBar value={p.percent} height={10} />
-                {p.percent >= 80 && <div style={{ fontSize: 11, color: B.success, fontWeight: 700, marginTop: 4 }}>✓ Certificate unlocked!</div>}
+                {p.percent >= 80 && p.certifiable && <div style={{ fontSize: 11, color: B.success, fontWeight: 700, marginTop: 4 }}>✓ Certificate unlocked!</div>}
               </div>
             );
           })}
@@ -3526,7 +3526,9 @@ const CertificatesPage = ({ user }) => {
   const [profile, setProfile] = useState(null);
   const [courses, setCourses] = useState([]);
   useEffect(() => { GET("/profile").then(setProfile); GET("/courses").then(setCourses); }, []);
-  const completed = profile?.progress?.filter(p => p.percent >= 80) || [];
+  // Only progress the server can vouch for (`certifiable` = the course has real
+  // authored content) can produce a certificate.
+  const completed = profile?.progress?.filter(p => p.percent >= 80 && p.certifiable) || [];
 
   const downloadCert = course => {
     const canvas = document.createElement("canvas");
@@ -5380,17 +5382,34 @@ const StudentAnalyticsPage = () => {
   const quizAvg = profile.quizResults?.length > 0 ? Math.round(profile.quizResults.reduce((a,r) => a+(r.score/r.total*100), 0) / profile.quizResults.length) : 0;
 
   const weekDays = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
-  const weekActivity = weekDays.map((d, i) => ({ day: d, value: Math.random() > 0.3 ? Math.floor(Math.random()*3)+1 : 0 }));
+  // Real per-day engagement from the server (lessons, materials, quizzes, logins).
+  // Never generated — a day with no activity stays empty.
+  const weekActivity = Array.isArray(profile.weekActivity) && profile.weekActivity.length === 7
+    ? profile.weekActivity
+    : weekDays.map(day => ({ day, count: 0, future: false }));
+  const busiestDay = Math.max(1, ...weekActivity.map(a => a.count || 0));
+  const totalWeek = weekActivity.reduce((a, d) => a + (d.count || 0), 0);
 
   const Heatmap = () => (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", gap: 4 }}>
-        {weekDays.map((d, i) => (
-          <div key={d} style={{ flex: 1, textAlign: "center" }}>
-            <div style={{ fontSize: 10, color: "var(--text2)", marginBottom: 4 }}>{d}</div>
-            <div style={{ height: 28, borderRadius: 6, background: weekActivity[i].value > 0 ? `rgba(232,119,34,${0.3 + weekActivity[i].value * 0.2})` : "var(--surface2)", border: "1px solid var(--border)" }} />
-          </div>
-        ))}
+        {weekDays.map((d, i) => {
+          const a = weekActivity[i] || { count: 0 };
+          // Shade relative to the student's own busiest day this week.
+          const shade = a.count > 0 ? 0.15 + 0.8 * Math.min(1, a.count / busiestDay) : 0;
+          return (
+            <div key={d} style={{ flex: 1, textAlign: "center" }}>
+              <div style={{ fontSize: 10, color: "var(--text2)", marginBottom: 4 }}>{d}</div>
+              <div
+                title={a.future ? `${d} — upcoming` : `${d}: ${a.count} ${a.count === 1 ? "activity" : "activities"}`}
+                style={{ height: 28, borderRadius: 6, background: shade > 0 ? `rgba(232,119,34,${shade})` : "var(--surface2)", border: "1px solid var(--border)", opacity: a.future ? 0.45 : 1 }}
+              />
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 11, color: "var(--text2)" }}>
+        {totalWeek > 0 ? `${totalWeek} ${totalWeek === 1 ? "activity" : "activities"} this week` : "No activity recorded yet this week — open a lesson to get started."}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
         <span style={{ fontSize: 11, color: "var(--text2)" }}>Less</span>
@@ -5410,7 +5429,7 @@ const StudentAnalyticsPage = () => {
       <div className="stat-grid" style={{ marginBottom: 24 }}>
         <StatCard label="XP Earned" value={(profile.xp || 0).toLocaleString()} icon="zap" color={B.orange} />
         <StatCard label="Avg Progress" value={`${avgProgress}%`} icon="progress" color={B.navy} />
-        <StatCard label="Quiz Avg" value={`${quizAvg}%`} icon="quiz" color="#10B981" />
+        <StatCard label="Quiz Avg" value={profile.quizResults?.length ? `${quizAvg}%` : "—"} icon="quiz" color="#10B981" />
         <StatCard label="Rank" value={rank > 0 ? `#${rank}` : "—"} icon="trophy" color="#F59E0B" />
       </div>
 
