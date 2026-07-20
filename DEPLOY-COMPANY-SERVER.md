@@ -38,9 +38,29 @@ IP, e.g. **http://192.168.1.50:9000**.
    - Now the server launches by itself whenever the PC starts, and restarts
      automatically if it ever crashes.
 
-6. **Security before real use** (edit `server/.env`):
-   - Set a real `JWT_SECRET` (any long random string).
-   - Change the demo passwords (they are public in the README).
+6. **Security before real use — do not skip this.**
+
+   a. **Set a real `JWT_SECRET`** in `server/.env`. It must be different from the
+      one on any other machine. Generate one:
+      ```
+      node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+      ```
+
+   b. **Rotate every account still on a shipped default password.** Older
+      versions of this project published those passwords in the README on
+      GitHub, so treat any account created before that change as compromised.
+      Stop the server first, then:
+      ```
+      cd server
+      node set-password.js --all-defaults                       :: lists unsafe accounts
+      node set-password.js superadmin@dhishaai.com "Your Strong Password"
+      ```
+      Repeat for each account it lists, then start the server again.
+
+   c. **Confirm it is clean.** On startup the server prints either
+      `🔒 Security check: no default passwords, token secret is set.`
+      or a `⚠️ SECURITY` block listing what is still wrong. **Do not let students
+      or the public reach the server until you see the padlock line.**
 
 ---
 
@@ -80,6 +100,41 @@ again, or just reboot if auto-start is on). Users hard-refresh their browser
 
 > Backend change -> the server MUST be restarted or new features 404.
 > Frontend-only change -> users just hard-refresh.
+
+---
+
+## Backing up (do this before you launch, then on a schedule)
+
+The database uses SQLite in WAL mode, which means recent changes may still be
+sitting in the `-wal` file. **Copying only `dhishaai.db` can silently lose the
+most recent student progress.** Copy all three files together:
+
+```
+server\dhishaai.db
+server\dhishaai.db-wal
+server\dhishaai.db-shm
+```
+
+Safest of all: stop the server, copy `server\dhishaai.db*`, start it again.
+Also copy `server\uploads\` (lesson videos) and keep a note of `server\.env`
+somewhere safe — `.env` is deliberately not in git.
+
+---
+
+## Go-live checklist
+
+- [ ] `git pull` done and the server **restarted** (backend changes need a restart).
+- [ ] `JWT_SECRET` set in `server\.env`, different from every other machine.
+- [ ] `node set-password.js --all-defaults` reports **no** default passwords.
+- [ ] Startup prints `🔒 Security check: no default passwords, token secret is set.`
+- [ ] Firewall opened (`Allow-Firewall-Once.bat` as administrator).
+- [ ] Auto-start installed (`Install-Autostart.bat`) so a reboot brings it back.
+- [ ] A backup of `server\dhishaai.db*` taken and stored off the server.
+- [ ] Each course has its admin assigned and its syllabus published — a course
+      with no modules honestly shows "Course content coming soon".
+- [ ] If the site is reachable from **outside** the office network, put HTTPS in
+      front of it (see `DEPLOY-PUBLIC-DOMAIN.md`). Without it, student passwords
+      travel in clear text.
 
 ---
 

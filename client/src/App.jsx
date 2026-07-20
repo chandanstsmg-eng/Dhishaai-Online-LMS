@@ -971,13 +971,20 @@ const LandingPage = ({ onGetStarted }) => {
     { icon: "forum", title: "Community Forum", desc: "Ask, discuss, and collaborate with peers & instructors." },
     { icon: "assign", title: "Assignments", desc: "Submit work and get detailed feedback from instructors." },
   ];
-  // Every figure below is counted from the database — none are hardcoded.
-  const stats = pub ? [
-    [String(pub.courses), pub.courses === 1 ? "Course" : "Courses"],
-    [String(pub.categories), pub.categories === 1 ? "Subject Track" : "Subject Tracks"],
-    [String(pub.instructors), pub.instructors === 1 ? "Instructor" : "Instructors"],
-    ...(pub.aiEnabled ? [["24/7", "AI Tutor"]] : []),
-  ] : [];
+  // What we actually offer, stated as capabilities rather than counts.
+  //
+  // Raw counts ("5 Courses") read as small, and the numbers this replaced
+  // ("2,000+ Students Placed", "4.8★ Average Rating") were invented — there is
+  // no placement or rating data in the system to back them. Every line below is
+  // something the platform genuinely does, so it can be said with confidence and
+  // never goes stale. If real placement/rating figures exist one day, put them
+  // back here — but only if they can be sourced.
+  const highlights = [
+    { icon: "book",   label: "Instructor-led training" },
+    { icon: "code",   label: "Hands-on practice" },
+    { icon: "quiz",   label: "Assessments & feedback" },
+    { icon: "cert",   label: "Certificate on completion" },
+  ];
   // Live catalogue when we can reach it; otherwise the known course list, so a
   // visitor always sees what we actually offer.
   const courses = (pub?.courseList?.length ? pub.courseList : FALLBACK_COURSES);
@@ -1019,17 +1026,15 @@ const LandingPage = ({ onGetStarted }) => {
           <button onClick={() => document.getElementById("courses")?.scrollIntoView({ behavior: "smooth" })} style={{ padding: "14px 32px", borderRadius: 10, border: "2px solid rgba(255,255,255,.25)", background: "rgba(255,255,255,.06)", color: "#fff", fontWeight: 600, fontSize: 16, cursor: "pointer", transition: "all .2s", backdropFilter: "blur(8px)" }}>View Courses →</button>
         </div>
 
-        {/* Stats bar — only rendered once real figures have loaded. */}
-        {stats.length > 0 && (
-        <div style={{ display: "flex", justifyContent: "center", gap: "clamp(24px,5vw,56px)", marginTop: 48, flexWrap: "wrap", borderTop: "1px solid rgba(255,255,255,.1)", paddingTop: 36 }}>
-          {stats.map(([n, l]) => (
-            <div key={l} className="stat-hero">
-              <div className="stat-hero-num">{n}</div>
-              <div className="stat-hero-lbl">{l}</div>
+        {/* Capability strip — wraps to 2 columns on phones, one row on desktop. */}
+        <div style={{ display: "flex", justifyContent: "center", gap: "clamp(14px,3vw,32px)", marginTop: 48, flexWrap: "wrap", borderTop: "1px solid rgba(255,255,255,.1)", paddingTop: 32 }}>
+          {highlights.map(h => (
+            <div key={h.label} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 18px", borderRadius: 999, background: "rgba(255,255,255,.06)", border: "1px solid rgba(255,255,255,.12)" }}>
+              <Ico n={h.icon} s={17} c={B.orange} />
+              <span style={{ color: "rgba(255,255,255,.9)", fontSize: "clamp(12.5px,1.4vw,14px)", fontWeight: 600, whiteSpace: "nowrap" }}>{h.label}</span>
             </div>
           ))}
         </div>
-        )}
       </div>
 
       {/* Features Grid */}
