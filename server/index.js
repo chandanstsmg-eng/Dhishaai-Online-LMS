@@ -256,8 +256,21 @@ function seedDB() {
     { id: 'B2025-07', name: 'Batch Jul 2025', startDate: '01 Jul 2025' },
   ];
 
+  // Seed passwords come from .env when set; otherwise a strong random one is
+  // generated per account and printed ONCE here. A fresh install is therefore
+  // never publicly guessable, unlike the old hardcoded "superadmin123".
+  const generated = [];
+  const seedPw = (envKey, label) => {
+    const fromEnv = process.env[envKey];
+    if (fromEnv && fromEnv.length >= 8) return fromEnv;
+    const buf = require('crypto').randomBytes(9).toString('base64url');
+    generated.push([label, buf]);
+    return buf;
+  };
+
   // ── Super Admin ──
-  const superPw = bcrypt.hashSync('superadmin123', 10);
+  const superPlain = seedPw('SEED_SUPERADMIN_PASSWORD', 'superadmin@dhishaai.com');
+  const superPw = bcrypt.hashSync(superPlain, 10);
   const superUid = uuidv4();
   DB.users = [
     { id: superUid, email: 'superadmin@dhishaai.com', password: superPw, role: 'superadmin', name: 'Super Admin', createdAt: new Date().toISOString() },
@@ -266,12 +279,12 @@ function seedDB() {
 
   // ── Course Admins ──
   const adminDefs = [
-    { name: 'Priya Mehta',    email: 'priya@dhishaai.com',    subject: 'Python', pw: 'python123'  },
-    { name: 'Ravi Kumar',     email: 'ravi@dhishaai.com',     subject: 'SQL',    pw: 'sql123'     },
-    { name: 'Divya Sharma',   email: 'divya@dhishaai.com',    subject: 'BI',     pw: 'powerbi123' },
-    { name: 'Anil Reddy',     email: 'anil@dhishaai.com',     subject: 'ML',     pw: 'ml123'      },
-    { name: 'Suma Nair',      email: 'suma@dhishaai.com',     subject: 'Excel',  pw: 'excel123'   },
-  ];
+    { name: 'Priya Mehta',    email: 'priya@dhishaai.com',    subject: 'Python' },
+    { name: 'Ravi Kumar',     email: 'ravi@dhishaai.com',     subject: 'SQL'    },
+    { name: 'Divya Sharma',   email: 'divya@dhishaai.com',    subject: 'BI'     },
+    { name: 'Anil Reddy',     email: 'anil@dhishaai.com',     subject: 'ML'     },
+    { name: 'Suma Nair',      email: 'suma@dhishaai.com',     subject: 'Excel'  },
+  ].map(a => ({ ...a, pw: seedPw('SEED_ADMIN_PASSWORD', a.email) }));
 
   const adminIds = [];
   adminDefs.forEach((a, i) => {
@@ -308,7 +321,7 @@ function seedDB() {
 
   studentDefs.forEach((s, i) => {
     const uid = uuidv4();
-    DB.users.push({ id: uid, email: s.email, password: bcrypt.hashSync('student123', 10), role: 'student', name: s.name, createdAt: new Date().toISOString() });
+    DB.users.push({ id: uid, email: s.email, password: bcrypt.hashSync(seedPw('SEED_STUDENT_PASSWORD', s.email), 10), role: 'student', name: s.name, createdAt: new Date().toISOString() });
     const sid = i + 1;
     // Genuine start: students earn XP/streak/progress by actually completing modules & quizzes.
     DB.students.push({ id: sid, userId: uid, name: s.name, email: s.email, batchId: s.batchId, xp: 0, streak: 0, badges: 0, phone: '', joined: new Date().toISOString() });
@@ -344,20 +357,25 @@ function seedDB() {
 
   // ── Authority (read-only batch monitor) ──
   const authUid = uuidv4();
-  DB.users.push({ id: authUid, email: 'authority@dhishaai.com', password: bcrypt.hashSync('authority123', 10), role: 'authority', name: 'Batch Authority', createdAt: new Date().toISOString() });
+  DB.users.push({ id: authUid, email: 'authority@dhishaai.com', password: bcrypt.hashSync(seedPw('SEED_AUTHORITY_PASSWORD', 'authority@dhishaai.com'), 10), role: 'authority', name: 'Batch Authority', createdAt: new Date().toISOString() });
   DB.authorities = [
     { id: 'AUTH-001', userId: authUid, name: 'Batch Authority', email: 'authority@dhishaai.com', batchIds: ['B2025-01'], phone: '', createdAt: new Date().toISOString() },
   ];
 
+  // Show generated passwords ONCE, on first seed only. They are not stored in
+  // plain text anywhere and are never printed again on later boots.
+  if (generated.length) {
+    console.log('\n' + '═'.repeat(68));
+    console.log('🔑 FIRST-RUN PASSWORDS — copy these now, they are shown only once:');
+    generated.forEach(([who, pw]) => console.log(`   ${who.padEnd(28)} ${pw}`));
+    console.log('   Change them with:  node set-password.js <email> "<new password>"');
+    console.log('═'.repeat(68) + '\n');
+  }
+
   saveDB();
+  // Credentials are printed by the FIRST-RUN block above (once, and only when
+  // they were generated). They are never echoed on subsequent boots.
   console.log('✅ Database seeded with multi-admin structure.');
-  console.log('   SuperAdmin: superadmin@dhishaai.com / superadmin123');
-  console.log('   Python Admin: priya@dhishaai.com / python123');
-  console.log('   SQL Admin:    ravi@dhishaai.com   / sql123');
-  console.log('   BI Admin:     divya@dhishaai.com  / powerbi123');
-  console.log('   ML Admin:     anil@dhishaai.com   / ml123');
-  console.log('   Excel Admin:  suma@dhishaai.com   / excel123');
-  console.log('   Students: rahul@email.com / student123 (etc.)');
 }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
@@ -2748,6 +2766,38 @@ function lanIPs() {
   return out;
 }
 
+/**
+ * Loudly flag an unsafe deployment at boot. This replaces the old block that
+ * printed every account's password to the console on every start.
+ */
+const SHIPPED_DEFAULT_PASSWORDS = ['superadmin123','python123','sql123','powerbi123','ml123','excel123','student123','admin123'];
+async function warnAboutWeakSetup() {
+  const lines = [];
+  const placeholderSecret = !process.env.JWT_SECRET || /change-this|secret-v3-2025|dhishaai-lms-v5-secure-secret/i.test(process.env.JWT_SECRET);
+  if (placeholderSecret) lines.push('JWT_SECRET is still a placeholder — anyone who knows it can forge an admin login.');
+  try {
+    // bcrypt is deliberately slow, so this must never run synchronously at boot:
+    // comparing every user against every default would block the server for
+    // ~10s. Accounts already changed via set-password.js are skipped outright,
+    // and the async form yields between checks.
+    const compare = (pw, hash) => new Promise(r => bcrypt.compare(pw, hash, (e, ok) => r(!e && ok)));
+    const candidates = DB.users.filter(u => !u.passwordChangedAt).slice(0, 50);
+    const weak = [];
+    for (const u of candidates) {
+      for (const d of SHIPPED_DEFAULT_PASSWORDS) {
+        if (await compare(d, u.password)) { weak.push(u); break; }
+      }
+    }
+    if (weak.length) lines.push(`${weak.length} account(s) still use a shipped default password (including ${weak[0].email}).`);
+  } catch { /* ignore */ }
+  if (!lines.length) { console.log('🔒 Security check: no default passwords, token secret is set.\n'); return; }
+  console.log('\n' + '─'.repeat(64));
+  console.log('⚠️  SECURITY — do not expose this server publicly until fixed:');
+  lines.forEach(l => console.log('   • ' + l));
+  console.log('   Fix passwords with:  node set-password.js --all-defaults');
+  console.log('─'.repeat(64) + '\n');
+}
+
 function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n🚀 DhishaAI Enterprise LMS v5.0`);
@@ -2759,13 +2809,9 @@ function startServer() {
     console.log(`   (If it doesn't open on other devices, allow TCP port ${PORT} through Windows Firewall.)`);
   }
   ensureFirewallOpen(); // best-effort: open the firewall so LAN/Wi-Fi devices can connect
-  console.log(`\n👑 Super Admin : superadmin@dhishaai.com / superadmin123`);
-  console.log(`📘 Python Admin: priya@dhishaai.com     / python123`);
-  console.log(`📗 SQL Admin   : ravi@dhishaai.com      / sql123`);
-  console.log(`📊 BI Admin    : divya@dhishaai.com     / powerbi123`);
-  console.log(`🤖 ML Admin    : anil@dhishaai.com      / ml123`);
-  console.log(`📋 Excel Admin : suma@dhishaai.com      / excel123`);
-  console.log(`👤 Students    : rahul@email.com        / student123\n`);
+  // Passwords are never printed. Instead, warn loudly if any account is still
+  // on a shipped default, or if the token secret was left at the placeholder.
+  warnAboutWeakSetup();
   });
 }
 

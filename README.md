@@ -48,21 +48,41 @@ Then open the URL printed in the console (e.g. **http://localhost** on port 80, 
 
 ---
 
-## 🔐 Demo Login Credentials
+## 🔐 Login Credentials
 
 On first run the database is seeded with these accounts:
 
-| Role            | Email                     | Password       |
-|-----------------|---------------------------|----------------|
-| 👑 Super Admin  | superadmin@dhishaai.com   | superadmin123  |
-| 🐍 Python Admin | priya@dhishaai.com        | python123      |
-| 🗄️ SQL Admin    | ravi@dhishaai.com         | sql123         |
-| 📊 BI Admin     | divya@dhishaai.com        | powerbi123     |
-| 🤖 ML Admin     | anil@dhishaai.com         | ml123          |
-| 📋 Excel Admin  | suma@dhishaai.com         | excel123       |
-| 🎓 Student      | rahul@email.com           | student123     |
+| Role            | Email                     |
+|-----------------|---------------------------|
+| 👑 Super Admin  | superadmin@dhishaai.com   |
+| 🐍 Python Admin | priya@dhishaai.com        |
+| 🗄️ SQL Admin    | ravi@dhishaai.com         |
+| 📊 BI Admin     | divya@dhishaai.com        |
+| 🤖 ML Admin     | anil@dhishaai.com         |
+| 📋 Excel Admin  | suma@dhishaai.com         |
+| 🎓 Student      | rahul@email.com           |
 
-> **Change these passwords after first login** for any real deployment.
+**Passwords are not published here, and are not hardcoded.** On the very first
+run each account is given a strong random password, printed **once** to the
+server console — copy them then. To choose them yourself instead, set
+`SEED_SUPERADMIN_PASSWORD`, `SEED_ADMIN_PASSWORD`, `SEED_STUDENT_PASSWORD` and
+`SEED_AUTHORITY_PASSWORD` in `server/.env` before the first start.
+
+### Changing a password later
+
+Seeding only runs on a brand-new database, so editing the seed does **not**
+affect an account that already exists. Use the built-in tool (stop the server
+first, then restart it afterwards):
+
+```bash
+cd server
+node set-password.js --list                                  # show all accounts
+node set-password.js --all-defaults                          # find unsafe ones
+node set-password.js superadmin@dhishaai.com "New Strong Pw" # change one
+```
+
+The server prints a security warning on every boot while any account still uses
+a shipped default password, or while `JWT_SECRET` is left at the placeholder.
 
 ---
 

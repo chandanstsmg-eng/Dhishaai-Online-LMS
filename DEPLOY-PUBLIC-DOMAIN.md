@@ -123,9 +123,18 @@ These changes are on your company's network gear — I can't make them from the 
 
 ## E. Before you go live — security checklist
 
-- [ ] `JWT_SECRET` in `.env` changed to a long random string (not the placeholder).
-- [ ] **Demo passwords changed** — the ones in the README (superadmin123, student123,
-      etc.) are public on GitHub. Change them from the admin UI (or reseed) before launch.
+- [ ] `JWT_SECRET` in `.env` changed to a long random string (not the placeholder), and
+      **different from the one on any other machine**. Generate one with:
+      `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`
+- [ ] **No account left on a shipped default password.** Check and fix on the server:
+      ```bash
+      cd server
+      node set-password.js --all-defaults
+      node set-password.js superadmin@dhishaai.com "New Strong Pw"
+      ```
+      The server also prints a warning on every boot while any default remains.
+      (Older README versions published these passwords on GitHub, so treat any
+      account created before this change as compromised until rotated.)
 - [ ] `.env` is **not** committed to git (it's already in `.gitignore` — keep it that way).
 - [ ] MySQL user has a strong password and is **not** reachable from the public internet
       (only from the app server).

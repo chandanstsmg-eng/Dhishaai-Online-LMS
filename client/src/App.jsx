@@ -1257,7 +1257,7 @@ const AdminStudentsPage = ({ batches, courses }) => {
   const [search, setSearch] = useState("");
   const [batchFilter, setBatchFilter] = useState(""); // "" = all batches
   const [show, toastEl] = useToast();
-  const [form, setForm] = useState({ name: "", email: "", phone: "", password: "student123", batchId: "", enrolledCourses: [], experience: "", company: "", qualification: "" });
+  const [form, setForm] = useState({ name: "", email: "", phone: "", password: "", batchId: "", enrolledCourses: [], experience: "", company: "", qualification: "" });
   // Batches are managed locally so a batch created inline shows up immediately.
   const [batchList, setBatchList] = useState(batches || []);
   const [creatingBatch, setCreatingBatch] = useState(false);
@@ -1313,7 +1313,7 @@ const AdminStudentsPage = ({ batches, courses }) => {
     } catch (e) { show(e.message, "error"); }
   };
 
-  const openAdd = () => { setForm({ name: "", email: "", phone: "", password: "student123", batchId: "", enrolledCourses: [], experience: "", company: "", qualification: "" }); setModal("add"); };
+  const openAdd = () => { setForm({ name: "", email: "", phone: "", password: "", batchId: "", enrolledCourses: [], experience: "", company: "", qualification: "" }); setModal("add"); };
   const openEdit = s => { setForm({ name: s.name, email: s.email, phone: s.phone || "", password: "", batchId: s.batchId, enrolledCourses: s.enrolledCourses || [], experience: s.experience || "", company: s.company || "", qualification: s.qualification || "" }); setModal(s); };
 
   const save = async () => {
@@ -4560,7 +4560,7 @@ const SuperAdminManagePage = () => {
       {toastEl}
       <div className="section-header">
         <div><h1 className="section-title">Manage Admins</h1><p style={{ color: "var(--text2)", fontSize: 13 }}>{admins.length} course admins</p></div>
-        <button className="btn btn-primary" onClick={() => { setForm({ name: "", email: "", password: "admin123", subjects: [], phone: "", courseIds: [] }); setModal("add"); }}><Ico n="plus" s={15} />Add Admin</button>
+        <button className="btn btn-primary" onClick={() => { setForm({ name: "", email: "", password: "", subjects: [], phone: "", courseIds: [] }); setModal("add"); }}><Ico n="plus" s={15} />Add Admin</button>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(300px,1fr))", gap: 16 }}>
         {admins.map(a => (
