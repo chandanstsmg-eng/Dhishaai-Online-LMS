@@ -923,12 +923,35 @@ const EmptyState = ({ icon, title, desc, action }) => (
 
 
 // ─── LANDING PAGE ──────────────────────────────────────────────────────────────
+// DhishaAI's own published student testimonials, copied verbatim from
+// www.dhishaai.com. Only add entries here that a real student actually said —
+// never invent a quote, a job title, or an employer.
+const TESTIMONIALS = [
+  { name: "Tushar Pagar",           text: "Great learning experience!" },
+  { name: "Raja Shekar",            text: "The trainers are very knowledgeable." },
+  { name: "Aravinda P K",           text: "Hands-on projects helped me a lot." },
+  { name: "Vinay Prasad",           text: "I got placed in a top company!" },
+  { name: "Prathibha Rejeev",       text: "I loved the interactive sessions." },
+  { name: "Ananya Bangre",          text: "The placement assistance was great." },
+  { name: "Mamatha Nellamakkada",   text: "I learned a lot in a short time." },
+  { name: "Sowmya .D",              text: "The curriculum is industry-relevant." },
+  { name: "Punya Mallik",           text: "I highly recommend this institute." },
+  { name: "Pruthvik S N",           text: "The course material is excellent." },
+  { name: "Jeevan",                 text: "The Teaching is good" },
+];
+
 const LandingPage = ({ onGetStarted }) => {
   // Real, public figures counted from the database. Nothing on this page is
   // invented — if we can't count it, we don't claim it.
   const [pub, setPub] = useState(null);
+  const [pubState, setPubState] = useState("loading"); // loading | ready | unavailable
   useEffect(() => {
-    fetch("/api/public/stats").then(r => r.ok ? r.json() : null).then(setPub).catch(() => {});
+    fetch("/api/public/stats")
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error("unavailable"))))
+      .then(d => { setPub(d); setPubState("ready"); })
+      // If the server is older than this build the endpoint won't exist yet —
+      // show a neutral state rather than a broken-looking dash.
+      .catch(() => setPubState("unavailable"));
   }, []);
 
   const features = [
@@ -941,14 +964,14 @@ const LandingPage = ({ onGetStarted }) => {
     { icon: "forum", title: "Community Forum", desc: "Ask, discuss, and collaborate with peers & instructors." },
     { icon: "assign", title: "Assignments", desc: "Submit work and get detailed feedback from instructors." },
   ];
-  // Counted live, so these can never drift from reality.
-  const stats = [
-    [pub ? String(pub.courses) : "—", pub && pub.courses === 1 ? "Course" : "Courses"],
-    ["5", "Subject Tracks"],
-    ["Live", "Instructor Support"],
-    ...(pub?.aiEnabled ? [["24/7", "AI Tutor"]] : []),
-  ];
-  const courses = (pub?.courseList || []).map(c => ({ title: c.title, tag: c.category || "COURSE", color: c.color }));
+  // Every figure below is counted from the database — none are hardcoded.
+  const stats = pub ? [
+    [String(pub.courses), pub.courses === 1 ? "Course" : "Courses"],
+    [String(pub.categories), pub.categories === 1 ? "Subject Track" : "Subject Tracks"],
+    [String(pub.instructors), pub.instructors === 1 ? "Instructor" : "Instructors"],
+    ...(pub.aiEnabled ? [["24/7", "AI Tutor"]] : []),
+  ] : [];
+  const courses = pub?.courseList || [];
 
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(160deg,#0D2137 0%,#17406E 55%,#1a4d8a 100%)", overflowX: "hidden" }}>
@@ -960,6 +983,7 @@ const LandingPage = ({ onGetStarted }) => {
         <div className="landing-nav-links">
           <span className="landing-nav-link" onClick={() => document.getElementById("courses")?.scrollIntoView({ behavior: "smooth" })}>Courses</span>
           <span className="landing-nav-link" onClick={() => document.getElementById("features")?.scrollIntoView({ behavior: "smooth" })}>Features</span>
+          <span className="landing-nav-link" onClick={() => document.getElementById("testimonials")?.scrollIntoView({ behavior: "smooth" })}>Reviews</span>
           <span className="landing-nav-link" onClick={() => document.getElementById("contact")?.scrollIntoView({ behavior: "smooth" })}>Contact</span>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
@@ -982,10 +1006,11 @@ const LandingPage = ({ onGetStarted }) => {
         </p>
         <div style={{ display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap" }}>
           <button className="btn btn-primary btn-lg" onClick={onGetStarted}>Start Learning Free</button>
-          <button onClick={onGetStarted} style={{ padding: "14px 32px", borderRadius: 10, border: "2px solid rgba(255,255,255,.25)", background: "rgba(255,255,255,.06)", color: "#fff", fontWeight: 600, fontSize: 16, cursor: "pointer", transition: "all .2s", backdropFilter: "blur(8px)" }}>View Courses →</button>
+          <button onClick={() => document.getElementById("courses")?.scrollIntoView({ behavior: "smooth" })} style={{ padding: "14px 32px", borderRadius: 10, border: "2px solid rgba(255,255,255,.25)", background: "rgba(255,255,255,.06)", color: "#fff", fontWeight: 600, fontSize: 16, cursor: "pointer", transition: "all .2s", backdropFilter: "blur(8px)" }}>View Courses →</button>
         </div>
 
-        {/* Stats bar */}
+        {/* Stats bar — only rendered once real figures have loaded. */}
+        {stats.length > 0 && (
         <div style={{ display: "flex", justifyContent: "center", gap: "clamp(24px,5vw,56px)", marginTop: 48, flexWrap: "wrap", borderTop: "1px solid rgba(255,255,255,.1)", paddingTop: 36 }}>
           {stats.map(([n, l]) => (
             <div key={l} className="stat-hero">
@@ -994,6 +1019,7 @@ const LandingPage = ({ onGetStarted }) => {
             </div>
           ))}
         </div>
+        )}
       </div>
 
       {/* Features Grid */}
@@ -1015,31 +1041,91 @@ const LandingPage = ({ onGetStarted }) => {
         </div>
       </div>
 
-      {/* Course Preview — real courses only; hidden until they load */}
-      {courses.length > 0 && (
-      <div id="courses" style={{ padding: "0 clamp(16px,4vw,48px) clamp(40px,6vw,80px)", maxWidth: 1160, margin: "0 auto" }}>
+      {/* ── Our Courses — the real catalogue, straight from the database ── */}
+      <div id="courses" style={{ padding: "0 clamp(16px,4vw,48px) clamp(40px,6vw,80px)", maxWidth: 1160, margin: "0 auto", scrollMarginTop: 90 }}>
         <div style={{ textAlign: "center", marginBottom: 36 }}>
           <h2 style={{ fontSize: "clamp(22px,3vw,34px)", fontWeight: 800, color: "#fff", marginBottom: 10 }}>Our Courses</h2>
-          <p style={{ color: "rgba(255,255,255,.55)" }}>Practical, industry-aligned curriculum taught by expert instructors</p>
+          <p style={{ color: "rgba(255,255,255,.55)" }}>
+            {courses.length > 0
+              ? `${courses.length} course${courses.length === 1 ? "" : "s"} across ${pub.categories} subject track${pub.categories === 1 ? "" : "s"} — taught by our instructors`
+              : "Practical, industry-aligned training in data analytics"}
+          </p>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))", gap: 20 }}>
-          {courses.map(c => (
-            <div key={c.title} style={{ background: "rgba(255,255,255,.06)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 16, overflow: "hidden", transition: "transform .2s", cursor: "pointer" }} onClick={onGetStarted}>
-              <div style={{ height: 80, background: `linear-gradient(135deg,${c.color},${c.color}99)`, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
-                <Ico n="book" s={36} c="rgba(255,255,255,.4)" />
-                <span style={{ position: "absolute", top: 10, right: 10, background: B.orange, color: "#fff", borderRadius: 6, padding: "3px 8px", fontSize: 10, fontWeight: 800, letterSpacing: .5 }}>{c.tag}</span>
+
+        {pubState === "loading" && (
+          <div style={{ textAlign: "center", padding: 40 }}><Spinner size={28} color={B.orange} /></div>
+        )}
+
+        {pubState === "unavailable" && (
+          <div style={{ textAlign: "center", padding: 32, color: "rgba(255,255,255,.6)", background: "rgba(255,255,255,.05)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 16 }}>
+            Our course list is taking a moment to load. <button onClick={onGetStarted} style={{ background: "none", border: "none", color: B.orange, fontWeight: 700, cursor: "pointer", fontSize: "inherit", textDecoration: "underline" }}>Sign in</button> to see everything you're enrolled in.
+          </div>
+        )}
+
+        {pubState === "ready" && courses.length === 0 && (
+          <div style={{ textAlign: "center", padding: 32, color: "rgba(255,255,255,.6)", background: "rgba(255,255,255,.05)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 16 }}>
+            New courses are being prepared — check back soon.
+          </div>
+        )}
+
+        {pubState === "ready" && courses.length > 0 && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 20 }}>
+            {courses.map(c => (
+              <div key={c.id} onClick={onGetStarted} title={`Sign in to start ${c.title}`}
+                style={{ background: "rgba(255,255,255,.06)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 16, overflow: "hidden", cursor: "pointer", display: "flex", flexDirection: "column" }}>
+                <div style={{ height: 88, background: `linear-gradient(135deg,${c.color},${c.color}99)`, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+                  <Ico n="book" s={38} c="rgba(255,255,255,.45)" />
+                  {c.category && (
+                    <span style={{ position: "absolute", top: 10, right: 10, background: "rgba(0,0,0,.35)", color: "#fff", borderRadius: 6, padding: "3px 9px", fontSize: 10, fontWeight: 800, letterSpacing: .5, backdropFilter: "blur(4px)" }}>{c.category}</span>
+                  )}
+                </div>
+                <div style={{ padding: 18, display: "flex", flexDirection: "column", flex: 1 }}>
+                  <div style={{ fontWeight: 700, color: "#fff", fontSize: 15, marginBottom: 6 }}>{c.title}</div>
+                  {c.description && (
+                    <p style={{ color: "rgba(255,255,255,.6)", fontSize: 12.5, lineHeight: 1.6, marginBottom: 12, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{c.description}</p>
+                  )}
+                  <div style={{ marginTop: "auto", display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11.5, color: "rgba(255,255,255,.5)" }}>
+                    {c.instructor && <span>👩‍🏫 {c.instructor}</span>}
+                    {c.duration && <span>⏱ {c.duration}</span>}
+                    {/* Only claim modules that are actually published. */}
+                    {c.modules > 0 && <span>📦 {c.modules} module{c.modules === 1 ? "" : "s"}</span>}
+                  </div>
+                </div>
               </div>
-              <div style={{ padding: 18 }}>
-                <div style={{ fontWeight: 700, color: "#fff" }}>{c.title}</div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ textAlign: "center", marginTop: 28 }}>
+          <button className="btn btn-primary" onClick={onGetStarted}>Sign in to start learning →</button>
+        </div>
+      </div>
+
+      {/* ── What our students say ──
+          These are DhishaAI's own published student testimonials, taken verbatim
+          from www.dhishaai.com. Names are exactly as published; no job titles or
+          employers are added, because the source does not state any. Do not add
+          invented quotes, roles, or companies here. */}
+      <div id="testimonials" style={{ padding: "0 clamp(16px,4vw,48px) clamp(40px,6vw,80px)", maxWidth: 1160, margin: "0 auto", scrollMarginTop: 90 }}>
+        <div style={{ textAlign: "center", marginBottom: 36 }}>
+          <h2 style={{ fontSize: "clamp(22px,3vw,34px)", fontWeight: 800, color: "#fff", marginBottom: 10 }}>What Our Students Say</h2>
+          <p style={{ color: "rgba(255,255,255,.55)" }}>In their own words</p>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 18 }}>
+          {TESTIMONIALS.map(t => (
+            <div key={t.name} className="testimonial-card">
+              <div style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 46, color: B.orange, height: 22, marginBottom: 10, lineHeight: 1, userSelect: "none" }}>&ldquo;</div>
+              <p style={{ color: "rgba(255,255,255,.85)", fontSize: 14, lineHeight: 1.7, marginBottom: 16 }}>{t.text}</p>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{ width: 38, height: 38, borderRadius: 10, background: `${B.orange}30`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, color: B.orange, fontSize: 15, flexShrink: 0 }}>
+                  {t.name.trim().charAt(0).toUpperCase()}
+                </div>
+                <div style={{ fontWeight: 700, color: "#fff", fontSize: 13.5 }}>{t.name}</div>
               </div>
             </div>
           ))}
         </div>
       </div>
-      )}
-
-      {/* Testimonials intentionally omitted: we publish student quotes only when
-          they are real and consented to. Add them here once you have them. */}
 
       {/* CTA Banner */}
       <div style={{ padding: "0 clamp(16px,4vw,48px) clamp(48px,6vw,80px)", maxWidth: 800, margin: "0 auto", textAlign: "center" }}>

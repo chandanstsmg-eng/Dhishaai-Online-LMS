@@ -682,13 +682,29 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok', version: '3.0.0', 
 // Public (no login) figures for the landing page. Everything here is counted
 // from the real database — the page must never advertise invented numbers.
 app.get('/api/public/stats', (req, res) => {
+  const categories = [...new Set(DB.courses.map(c => c.category).filter(Boolean))];
   res.json({
     courses: DB.courses.length,
     students: DB.students.length,
+    categories: categories.length,
+    instructors: DB.admins.length,
     aiEnabled: ai.aiAvailable(),
-    courseList: DB.courses.slice(0, 8).map(c => ({
-      id: c.id, title: c.title, category: c.category || '', color: c.color || '#4F46E5',
-    })),
+    // Everything a visitor needs to see what is on offer, without logging in.
+    courseList: DB.courses.map(c => {
+      const owner = DB.admins.find(a => a.id === c.ownerId);
+      return {
+        id: c.id,
+        title: c.title,
+        category: c.category || '',
+        color: c.color || '#4F46E5',
+        description: c.description || '',
+        duration: c.duration || '',
+        instructor: owner?.name || '',
+        // How many modules are actually published, so the page never implies
+        // content that does not exist.
+        modules: Array.isArray(c.modules) ? c.modules.length : 0,
+      };
+    }),
   });
 });
 
