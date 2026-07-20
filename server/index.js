@@ -82,6 +82,7 @@ let DB = {
   group_sessions: [], // { id, hostId, hostName, courseId, topic, date, time, duration, note, createdAt, joiners:[{studentId, studentName}] } — student-run group study sessions
   lesson_videos: [],  // { id, courseId, moduleIndex, title, description, videoUrl, visible, order, adminId, adminName, createdAt } — admin-added recorded video lessons
   activity: [],     // { id:'<studentId>|<YYYY-MM-DD>', studentId, date, count, lastAt } — one row per student per day, drives the Weekly Activity chart and the streak
+  certificates: [], // { id, serial, studentId, studentName, courseId, courseTitle, percent, issuedAt } — issued once, then immutable
 };
 
 async function loadDB() {
@@ -192,7 +193,20 @@ function recordActivity(studentId, weight = 1) {
   if (row) { row.count += weight; row.lastAt = new Date().toISOString(); }
   else DB.activity.push({ id, studentId, date, count: weight, lastAt: new Date().toISOString() });
   recomputeStreak(studentId);
+  refreshBadges(studentId); // badges follow real progress, so re-evaluate here
   saveDB();
+}
+
+/**
+ * Has this student done anything in the last `days` days? This is the single
+ * definition of "active" used everywhere, so the admin and authority screens
+ * can no longer disagree about who is attending.
+ */
+function recentlyActive(studentId, days = 7) {
+  const cutoff = new Date(); cutoff.setHours(0, 0, 0, 0);
+  cutoff.setDate(cutoff.getDate() - (days - 1));
+  const cutoffKey = dayKey(cutoff);
+  return (DB.activity || []).some(a => a.studentId === studentId && a.date >= cutoffKey);
 }
 
 /** Mon→Sun of the current week with real per-day counts (0 for days with none). */
@@ -380,8 +394,13 @@ function livePercent(course, prog) {
   const idxSet = new Set(modules.map((_, i) => i));
   const isRead = id => viewed.some(v => String(v) === String(id));
   const courseQuizzes = (DB.quizzes || []).filter(q => q.courseId === course.id);
+  // Quizzes the admin tagged to a module gate that module. Untagged quizzes are
+  // NOT guessed into arbitrary modules (the old `untagged[i]` indexed the
+  // untagged list by module number, which silently dropped some quizzes and
+  // mis-assigned others); they are counted once, at the end, instead.
+  const tagged = i => courseQuizzes.find(q => q.moduleIndex === i) || null;
   const untagged = courseQuizzes.filter(q => q.moduleIndex === undefined || q.moduleIndex === null);
-  const quizForModule = i => courseQuizzes.find(q => q.moduleIndex === i) || untagged[i] || null;
+  const quizForModule = i => tagged(i);
   const matsForModule = i => (DB.materials || []).filter(m =>
     Number(m.courseId) === course.id &&
     (Number(m.moduleIndex) === i || (i === 0 && (m.moduleIndex === null || m.moduleIndex === undefined || m.moduleIndex === '' || !idxSet.has(Number(m.moduleIndex))))));
@@ -392,8 +411,12 @@ function livePercent(course, prog) {
     matsForModule(i).forEach(mat => { total++; if (isRead(mat.id)) dn++; });
     const q = quizForModule(i); if (q) { total++; if (passed(q)) dn++; }
   });
+  // Untagged course quizzes still count towards completion — once each, rather
+  // than being dropped or attributed to a module the admin never chose.
+  untagged.forEach(q => { total++; if (passed(q)) dn++; });
   if (total === 0) return clamp(prog && prog.percent);
-  return clamp((dn / total) * 100);
+  // Floor, not round: 99.5% must not display as a finished 100%.
+  return Math.max(0, Math.min(100, Math.floor((dn / total) * 100)));
 }
 
 /**
@@ -407,6 +430,54 @@ function hasCompletableUnits(course) {
   const mats = (DB.materials || []).filter(m => Number(m.courseId) === course.id).length;
   const quizzes = (DB.quizzes || []).filter(q => q.courseId === course.id).length;
   return (topics + mats + quizzes) > 0;
+}
+
+/**
+ * The badge catalogue. Each rule is evaluated from REAL data, so a badge can
+ * never be hardcoded on or permanently unreachable. Keep the ids stable — they
+ * are what the student's earned list stores.
+ */
+const BADGE_RULES = [
+  { id: 'first-steps', label: 'First Steps', icon: '⭐', desc: 'Complete your first lesson',
+    earned: ctx => ctx.lessonsDone >= 1 },
+  { id: 'quiz-taker', label: 'Quiz Taker', icon: '🏆', desc: 'Finish your first quiz',
+    earned: ctx => ctx.quizzes >= 1 },
+  { id: 'sharp-shooter', label: 'Sharp Shooter', icon: '🎯', desc: 'Score 80% or more on a quiz',
+    earned: ctx => ctx.bestQuizPct >= 80 },
+  { id: 'week-streak', label: '7-Day Streak', icon: '🔥', desc: 'Learn 7 days in a row',
+    earned: ctx => ctx.streak >= 7 },
+  { id: 'course-champ', label: 'Course Champ', icon: '📚', desc: 'Finish a course',
+    earned: ctx => ctx.coursesCompleted >= 1 },
+  { id: 'data-wizard', label: 'Data Wizard', icon: '🧙', desc: 'Earn 2,000 XP',
+    earned: ctx => ctx.xp >= 2000 },
+];
+
+/** Evaluate every badge rule for a student against live data. */
+function badgesFor(studentId) {
+  const s = DB.students.find(x => x.id === studentId);
+  if (!s) return [];
+  const results = DB.quiz_results.filter(r => r.studentId === studentId && Number(r.total) > 0);
+  const progs = DB.progress.filter(p => p.studentId === studentId);
+  const ctx = {
+    xp: Number(s.xp) || 0,
+    streak: Number(s.streak) || 0,
+    quizzes: results.length,
+    bestQuizPct: results.length ? Math.max(...results.map(r => (r.score / r.total) * 100)) : 0,
+    lessonsDone: progs.reduce((a, p) => a + ((p.completedLessons || []).length), 0),
+    coursesCompleted: progs.filter(p => {
+      const c = DB.courses.find(x => x.id === p.courseId);
+      return hasCompletableUnits(c) && livePercent(c, p) >= 100;
+    }).length,
+  };
+  return BADGE_RULES.map(b => ({ id: b.id, label: b.label, icon: b.icon, desc: b.desc, earned: !!b.earned(ctx) }));
+}
+
+/** Keep the stored `badges` count in step with the rules. */
+function refreshBadges(studentId) {
+  const n = badgesFor(studentId).filter(b => b.earned).length;
+  const sidx = DB.students.findIndex(s => s.id === studentId);
+  if (sidx >= 0 && DB.students[sidx].badges !== n) DB.students[sidx].badges = n;
+  return n;
 }
 
 /**
@@ -434,12 +505,64 @@ function sanitizeStudentCounters() {
       else if (s[f] !== n) { s[f] = n; fixed++; }
     }
   });
-  if (fixed) { console.log(`🩹 Repaired ${fixed} corrupted student counter(s).`); saveDB(); }
+  // Drop duplicate enrollment/progress rows left by the old save path — a course
+  // counted twice skewed every average that student appears in.
+  const seenEnroll = new Set(), seenProg = new Set();
+  const beforeE = DB.enrollments.length, beforeP = DB.progress.length;
+  DB.enrollments = DB.enrollments.filter(e => {
+    const k = `${e.studentId}|${e.courseId}`;
+    if (seenEnroll.has(k)) return false; seenEnroll.add(k); return true;
+  });
+  DB.progress = DB.progress.filter(p => {
+    const k = `${p.studentId}|${p.courseId}`;
+    if (seenProg.has(k)) return false; seenProg.add(k); return true;
+  });
+  const dupes = (beforeE - DB.enrollments.length) + (beforeP - DB.progress.length);
+  if (dupes) console.log(`🩹 Removed ${dupes} duplicate enrollment/progress row(s).`);
+
+  // Bring every student's badge count in line with the rules (the field used to
+  // be dead, so stored values are all 0 on an existing database).
+  DB.students.forEach(s => refreshBadges(s.id));
+  if (fixed) console.log(`🩹 Repaired ${fixed} corrupted student counter(s).`);
+  saveDB();
+}
+
+/**
+ * Mean completion across the courses a student is ACTUALLY enrolled in (not the
+ * admin's course count, which understated every student), using the same
+ * livePercent() every other screen uses so the dashboards agree. Duplicate
+ * enrollment rows are de-duplicated so a course can't be double-weighted.
+ */
+function studentAvgProgress(studentId, limitToCourseIds) {
+  let ids = DB.enrollments.filter(e => e.studentId === studentId).map(e => e.courseId);
+  if (Array.isArray(limitToCourseIds)) ids = ids.filter(cid => limitToCourseIds.includes(cid));
+  ids = [...new Set(ids)];
+  if (!ids.length) return 0;
+  const sum = ids.reduce((a, cid) => {
+    const c = DB.courses.find(x => x.id === cid);
+    const p = DB.progress.find(x => x.studentId === studentId && x.courseId === cid);
+    return a + livePercent(c, p);
+  }, 0);
+  return Math.round(sum / ids.length);
+}
+
+/**
+ * Students per batch, plus an explicit "Unassigned" bucket. Without it the
+ * chart silently omitted students who have no batch yet, so the totals never
+ * added up to the headline student count.
+ */
+function batchCounts(students) {
+  const rows = DB.batches.map(b => ({ batch: b.name, count: students.filter(s => s.batchId === b.id).length }));
+  const known = new Set(DB.batches.map(b => b.id));
+  const unassigned = students.filter(s => !s.batchId || !known.has(s.batchId)).length;
+  if (unassigned) rows.push({ batch: 'Unassigned', count: unassigned });
+  return rows;
 }
 
 /** Build a rich, read-only report object for a student (used by authority views) */
 function studentReport(s) {
-  const enrolled = DB.enrollments.filter(e => e.studentId === s.id).map(e => e.courseId);
+  // De-duplicated: a stray duplicate enrollment row must not double-count a course.
+  const enrolled = [...new Set(DB.enrollments.filter(e => e.studentId === s.id).map(e => e.courseId))];
   const courses = enrolled.map(cid => {
     const c = DB.courses.find(x => x.id === cid);
     const prog = DB.progress.find(p => p.studentId === s.id && p.courseId === cid);
@@ -460,8 +583,14 @@ function studentReport(s) {
     batchId: s.batchId, batchName: batch?.name || s.batchId || '—',
     xp: s.xp || 0, streak: s.streak || 0, badges: s.badges || 0,
     courses, avgProgress, quizResults: results, quizAvg,
-    completedCourses: courses.filter(c => c.percent >= 80).length,
-    active: (s.streak > 0) || courses.some(c => c.percent > 0),
+    // "Completed" means finished, not 80%. The 80% mark is reported separately
+    // so a report can still show who is close.
+    completedCourses: courses.filter(c => c.percent >= 100).length,
+    nearlyCompleteCourses: courses.filter(c => c.percent >= 80 && c.percent < 100).length,
+    // Active = genuinely recent. Previously any student who ever completed one
+    // topic stayed "active" forever, so this number only ever grew.
+    active: recentlyActive(s.id),
+    enrolledCount: enrolled.length,
     lastActivity,
   };
 }
@@ -531,6 +660,19 @@ function authorityOnly(req, res, next) {
 // ─── ROUTES ──────────────────────────────────────────────────────────────────
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', version: '3.0.0', time: new Date().toISOString() }));
+
+// Public (no login) figures for the landing page. Everything here is counted
+// from the real database — the page must never advertise invented numbers.
+app.get('/api/public/stats', (req, res) => {
+  res.json({
+    courses: DB.courses.length,
+    students: DB.students.length,
+    aiEnabled: ai.aiAvailable(),
+    courseList: DB.courses.slice(0, 8).map(c => ({
+      id: c.id, title: c.title, category: c.category || '', color: c.color || '#4F46E5',
+    })),
+  });
+});
 
 // ── AUTH ──────────────────────────────────────────────────────────────────────
 app.post('/api/auth/login', (req, res) => {
@@ -708,7 +850,12 @@ app.get('/api/authority/data', auth, authorityOnly, (req, res) => {
   const batchStudents = DB.students.filter(s => batchIds.includes(s.batchId));
   const students = batchStudents.map(studentReport);
   const active = students.filter(s => s.active).length;
-  const avgProgress = students.length ? Math.round(students.reduce((a, s) => a + s.avgProgress, 0) / students.length) : 0;
+  // Averaged over students who actually have a course. Including students with
+  // no enrollments dragged every batch mean towards zero — which would have hit
+  // hardest on launch day, when most students are freshly created.
+  const enrolledStudents = students.filter(s => s.enrolledCount > 0);
+  const avgProgress = enrolledStudents.length
+    ? Math.round(enrolledStudents.reduce((a, s) => a + s.avgProgress, 0) / enrolledStudents.length) : 0;
   const avgQuiz = (() => {
     const withQuiz = students.filter(s => s.quizResults.length > 0);
     return withQuiz.length ? Math.round(withQuiz.reduce((a, s) => a + s.quizAvg, 0) / withQuiz.length) : 0;
@@ -716,11 +863,12 @@ app.get('/api/authority/data', auth, authorityOnly, (req, res) => {
   const batches = batchIds.map(bid => {
     const b = DB.batches.find(x => x.id === bid);
     const bs = students.filter(s => s.batchId === bid);
+    const bsEnrolled = bs.filter(s => s.enrolledCount > 0);
     return {
       id: bid, name: b?.name || bid,
       total: bs.length,
       active: bs.filter(s => s.active).length,
-      avgProgress: bs.length ? Math.round(bs.reduce((a, s) => a + s.avgProgress, 0) / bs.length) : 0,
+      avgProgress: bsEnrolled.length ? Math.round(bsEnrolled.reduce((a, s) => a + s.avgProgress, 0) / bsEnrolled.length) : 0,
     };
   });
   res.json({
@@ -1290,27 +1438,26 @@ app.put('/api/students/:id', auth, adminOrSuper, (req, res) => {
   };
 
   if (enrolledCourses !== undefined) {
-    // Admin can only add/remove from their own courses — preserve other courses
-    if (req.user.role === 'admin') {
-      const adminRec  = getAdminRecord(req.user.id);
-      const myCourseIds = adminCourseIds(adminRec.id);
-      // Remove existing enrollments for this admin's courses only
-      DB.enrollments = DB.enrollments.filter(e => !(e.studentId === id && myCourseIds.includes(e.courseId)));
-      DB.progress    = DB.progress.filter(p    => !(p.studentId === id && myCourseIds.includes(p.courseId)));
-      // Add new ones
-      enrolledCourses.filter(cid => myCourseIds.includes(cid)).forEach(cid => {
+    // De-duplicated so the same course can't be enrolled twice (which would
+    // double-weight it in every average).
+    const wanted = [...new Set((Array.isArray(enrolledCourses) ? enrolledCourses : []).map(Number).filter(Number.isFinite))];
+    // An admin may only change enrollment for their own courses; a superadmin
+    // has the whole catalogue in scope.
+    const scope = req.user.role === 'admin' ? adminCourseIds(getAdminRecord(req.user.id)?.id) : null;
+    const inScope = cid => !scope || scope.includes(cid);
+    const target = wanted.filter(inScope);
+
+    // Only drop in-scope courses that are no longer wanted. Progress for courses
+    // the student REMAINS enrolled in is preserved — re-saving a student must
+    // never reset their completed lessons back to zero.
+    DB.enrollments = DB.enrollments.filter(e => !(e.studentId === id && inScope(e.courseId) && !target.includes(e.courseId)));
+    DB.progress    = DB.progress.filter(p    => !(p.studentId === id && inScope(p.courseId) && !target.includes(p.courseId)));
+    target.forEach(cid => {
+      if (!DB.enrollments.some(e => e.studentId === id && e.courseId === cid))
         DB.enrollments.push({ id: uuidv4(), studentId: id, courseId: cid, enrolledAt: new Date().toISOString() });
-        DB.progress.push({ id: uuidv4(), studentId: id, courseId: cid, percent: 0, lastActivity: new Date().toISOString() });
-      });
-    } else {
-      // Super admin can change all
-      DB.enrollments = DB.enrollments.filter(e => e.studentId !== id);
-      DB.progress    = DB.progress.filter(p => p.studentId !== id);
-      enrolledCourses.forEach(cid => {
-        DB.enrollments.push({ id: uuidv4(), studentId: id, courseId: cid, enrolledAt: new Date().toISOString() });
-        DB.progress.push({ id: uuidv4(), studentId: id, courseId: cid, percent: 0, lastActivity: new Date().toISOString() });
-      });
-    }
+      if (!DB.progress.some(p => p.studentId === id && p.courseId === cid))
+        DB.progress.push({ id: uuidv4(), studentId: id, courseId: cid, percent: 0, completedLessons: [], viewedMaterials: [], lastActivity: new Date().toISOString() });
+    });
   }
 
   const uidx = DB.users.findIndex(u => u.id === DB.students[idx].userId);
@@ -1402,8 +1549,20 @@ app.delete('/api/quizzes/:id', auth, adminOrSuper, (req, res) => {
     if (!adminCourseIds(adminRec?.id).includes(quiz.courseId)) return res.status(403).json({ error: 'Not your quiz' });
   }
   DB.quizzes = DB.quizzes.filter(q => q.id !== id);
+  // Remove the attempts too. Left behind, they kept feeding the score averages
+  // while livePercent could no longer match them, so completion silently fell.
+  const orphaned = DB.quiz_results.filter(r => r.quizId === id);
+  if (orphaned.length) {
+    DB.quiz_results = DB.quiz_results.filter(r => r.quizId !== id);
+    // Reclaim the XP those attempts paid out, so deleting a quiz can't leave
+    // students holding XP for work that no longer exists.
+    orphaned.forEach(r => {
+      const sidx = DB.students.findIndex(s => s.id === r.studentId);
+      if (sidx >= 0) DB.students[sidx].xp = Math.max(0, (Number(DB.students[sidx].xp) || 0) - (Number(r.xpAwarded) || 0));
+    });
+  }
   saveDB();
-  res.json({ success: true });
+  res.json({ success: true, removedAttempts: orphaned.length });
 });
 
 // ── QUIZ RESULTS ──────────────────────────────────────────────────────────────
@@ -1460,7 +1619,25 @@ app.get('/api/quiz-results', auth, (req, res) => {
 
 // ── PROGRESS ──────────────────────────────────────────────────────────────────
 app.get('/api/progress/:studentId', auth, (req, res) => {
-  res.json(DB.progress.filter(p => p.studentId === parseInt(req.params.studentId)));
+  const targetId = parseInt(req.params.studentId);
+  const me = DB.students.find(s => s.userId === req.user.id);
+  // A student may only read their OWN progress. Staff are scoped to the students
+  // they are responsible for. Previously any logged-in user could enumerate
+  // every student's progress by walking the id.
+  if (req.user.role === 'student') {
+    if (!me || me.id !== targetId) return res.status(403).json({ error: 'Forbidden' });
+  } else if (req.user.role === 'admin') {
+    const adminRec = getAdminRecord(req.user.id);
+    if (!adminVisibleStudentIds(adminRec?.id).includes(targetId)) return res.status(403).json({ error: 'Forbidden' });
+  } else if (req.user.role === 'authority') {
+    const authRec = getAuthorityRecord(req.user.id);
+    const batchIds = authRec?.batchIds || [];
+    const target = DB.students.find(s => s.id === targetId);
+    if (!target || !batchIds.includes(target.batchId)) return res.status(403).json({ error: 'Forbidden' });
+  } else if (req.user.role !== 'superadmin') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  res.json(DB.progress.filter(p => p.studentId === targetId));
 });
 
 app.put('/api/progress', auth, (req, res) => {
@@ -1549,10 +1726,10 @@ app.get('/api/analytics/overview', auth, adminOrSuper, (req, res) => {
       totalQuizzes:  DB.quizzes.length,
       totalAttempts: DB.quiz_results.length,
       avgScore:      avgQuizPercent(DB.quiz_results),
-      activeStudents: DB.students.filter(s=>s.streak>0).length,
-      progressByStudent: DB.students.map(s=>({ name:s.name, xp:s.xp, progress: DB.progress.filter(p=>p.studentId===s.id).reduce((a,p)=>a+p.percent,0)/Math.max(1,DB.enrollments.filter(e=>e.studentId===s.id).length) })),
+      activeStudents: DB.students.filter(s=>recentlyActive(s.id)).length,
+      progressByStudent: DB.students.map(s=>({ name:s.name, xp:Number(s.xp)||0, progress: studentAvgProgress(s.id) })),
       quizResults: DB.quiz_results,
-      enrollmentsByBatch: DB.batches.map(b=>({ batch:b.name, count:DB.students.filter(s=>s.batchId===b.id).length })),
+      enrollmentsByBatch: batchCounts(DB.students),
     });
   }
 
@@ -1568,10 +1745,10 @@ app.get('/api/analytics/overview', auth, adminOrSuper, (req, res) => {
     totalQuizzes:   DB.quizzes.filter(q => myCourseIds.includes(q.courseId)).length,
     totalAttempts:  myResults.length,
     avgScore:       avgQuizPercent(myResults),
-    activeStudents: myStudents.filter(s=>s.streak>0).length,
-    progressByStudent: myStudents.map(s=>({ name:s.name, xp:s.xp, progress: DB.progress.filter(p=>p.studentId===s.id && myCourseIds.includes(p.courseId)).reduce((a,p)=>a+p.percent,0)/Math.max(1,myCourseIds.length) })),
+    activeStudents: myStudents.filter(s=>recentlyActive(s.id)).length,
+    progressByStudent: myStudents.map(s=>({ name:s.name, xp:Number(s.xp)||0, progress: studentAvgProgress(s.id, myCourseIds) })),
     quizResults: myResults,
-    enrollmentsByBatch: DB.batches.map(b=>({ batch:b.name, count:myStudents.filter(s=>s.batchId===b.id).length })),
+    enrollmentsByBatch: batchCounts(myStudents),
   });
 });
 
@@ -1684,7 +1861,8 @@ app.get('/api/profile', auth, (req, res) => {
     });
   const results  = DB.quiz_results.filter(r => r.studentId === student.id);
   const batch    = DB.batches.find(b => b.id === student.batchId);
-  res.json({ ...student, batchName: batch?.name || student.batchId || null, enrolledCourses: enrolled, progress, quizResults: results, weekActivity: weekActivityFor(student.id) });
+  refreshBadges(student.id);
+  res.json({ ...student, badges: student.badges, badgeList: badgesFor(student.id), batchName: batch?.name || student.batchId || null, enrolledCourses: enrolled, progress, quizResults: results, weekActivity: weekActivityFor(student.id) });
 });
 
 app.put('/api/profile', auth, (req, res) => {
@@ -1699,20 +1877,84 @@ app.put('/api/profile', auth, (req, res) => {
   res.json(DB.students[sidx]);
 });
 
+// ── CERTIFICATES ──────────────────────────────────────────────────────────────
+// A certificate is a real, immutable record. It is issued once, when the course
+// is genuinely finished, and freezes the student's name and the issue date so a
+// re-download can never produce a different-looking document.
+const CERT_PASS_MARK = 100; // a certificate means finished, not "mostly done"
+
+app.get('/api/certificates', auth, (req, res) => {
+  const student = DB.students.find(s => s.userId === req.user.id);
+  if (!student) return res.json([]);
+  // Award any newly-earned certificates before listing.
+  DB.enrollments.filter(e => e.studentId === student.id).forEach(e => {
+    const course = DB.courses.find(c => c.id === e.courseId);
+    if (!hasCompletableUnits(course)) return;
+    const prog = DB.progress.find(p => p.studentId === student.id && p.courseId === e.courseId);
+    if (livePercent(course, prog) < CERT_PASS_MARK) return;
+    if (DB.certificates.some(c => c.studentId === student.id && c.courseId === course.id)) return;
+    const year = new Date().getFullYear();
+    DB.certificates.push({
+      id: uuidv4(),
+      serial: `DHI-${year}-${String(DB.certificates.length + 1).padStart(5, '0')}`,
+      studentId: student.id,
+      studentName: student.name,          // frozen at issue time
+      courseId: course.id,
+      courseTitle: course.title,
+      percent: 100,
+      issuedAt: new Date().toISOString(), // frozen — not the download time
+    });
+    saveDB();
+  });
+  res.json(DB.certificates.filter(c => c.studentId === student.id));
+});
+
+// Public verification: anyone holding a certificate can check it is genuine.
+app.get('/api/certificates/verify/:serial', (req, res) => {
+  const cert = DB.certificates.find(c => c.serial === String(req.params.serial).toUpperCase());
+  if (!cert) return res.status(404).json({ valid: false, error: 'No certificate with that serial' });
+  res.json({ valid: true, serial: cert.serial, studentName: cert.studentName, courseTitle: cert.courseTitle, issuedAt: cert.issuedAt });
+});
+
 // ── LEADERBOARD ───────────────────────────────────────────────────────────────
 app.get('/api/leaderboard', auth, (req, res) => {
-  // Admin: only their students on leaderboard
+  // Each role sees only the cohort they belong to / are responsible for —
+  // a student's name and XP are not public to the whole institute.
+  let pool;
   if (req.user.role === 'admin') {
     const adminRec = getAdminRecord(req.user.id);
-    const myStudentIds = adminVisibleStudentIds(adminRec?.id);
-    const board = DB.students.filter(s => myStudentIds.includes(s.id))
-      .map(s => ({ id: s.id, name: s.name, xp: s.xp, streak: s.streak, badges: s.badges }))
-      .sort((a,b) => b.xp - a.xp);
-    return res.json(board);
+    const ids = adminVisibleStudentIds(adminRec?.id);
+    pool = DB.students.filter(s => ids.includes(s.id));
+  } else if (req.user.role === 'authority') {
+    const batchIds = getAuthorityRecord(req.user.id)?.batchIds || [];
+    pool = DB.students.filter(s => batchIds.includes(s.batchId));
+  } else if (req.user.role === 'student') {
+    const me = DB.students.find(s => s.userId === req.user.id);
+    if (!me) return res.json([]);
+    if (me.batchId) {
+      pool = DB.students.filter(s => s.batchId === me.batchId);
+    } else {
+      // No batch yet — compete with the people sharing their courses.
+      const myCourses = DB.enrollments.filter(e => e.studentId === me.id).map(e => e.courseId);
+      const peers = new Set(DB.enrollments.filter(e => myCourses.includes(e.courseId)).map(e => e.studentId));
+      peers.add(me.id);
+      pool = DB.students.filter(s => peers.has(s.id));
+    }
+  } else {
+    pool = DB.students; // superadmin sees everyone
   }
-  // Student / super: all students
-  const board = DB.students.map(s => ({ id: s.id, name: s.name, xp: s.xp, streak: s.streak, badges: s.badges })).sort((a,b) => b.xp - a.xp);
-  res.json(board);
+
+  const board = pool
+    .map(s => ({ id: s.id, name: s.name, xp: Number(s.xp) || 0, streak: Number(s.streak) || 0, badges: Number(s.badges) || 0 }))
+    .sort((a, b) => b.xp - a.xp || String(a.name).localeCompare(String(b.name)));
+
+  // Competition ranking: equal XP shares a rank (no more ordering by signup
+  // date), and `behind` counts only students who genuinely have less XP.
+  res.json(board.map(s => ({
+    ...s,
+    rank: board.filter(o => o.xp > s.xp).length + 1,
+    behind: board.filter(o => o.xp < s.xp).length,
+  })));
 });
 
 // ── ASSIGNMENTS ───────────────────────────────────────────────────────────────
@@ -2000,7 +2242,22 @@ app.delete('/api/courses/:courseId/topics/:topicId', auth, adminOrSuper, (req, r
 });
 
 // ── FORUM ─────────────────────────────────────────────────────────────────────
-app.get('/api/forum', auth, (req, res) => res.json(DB.forum_posts));
+// Students see general posts plus posts tied to a course they're enrolled in —
+// not every discussion on the platform.
+app.get('/api/forum', auth, (req, res) => {
+  if (req.user.role === 'student') {
+    const me = DB.students.find(s => s.userId === req.user.id);
+    if (!me) return res.json([]);
+    const mine = DB.enrollments.filter(e => e.studentId === me.id).map(e => e.courseId);
+    return res.json(DB.forum_posts.filter(p => !p.courseId || mine.includes(Number(p.courseId)) || p.authorId === req.user.id));
+  }
+  if (req.user.role === 'admin') {
+    const adminRec = getAdminRecord(req.user.id);
+    const mine = adminCourseIds(adminRec?.id);
+    return res.json(DB.forum_posts.filter(p => !p.courseId || mine.includes(Number(p.courseId))));
+  }
+  res.json(DB.forum_posts);
+});
 
 app.post('/api/forum', auth, (req, res) => {
   const { title, body, courseId } = req.body;
@@ -2076,7 +2333,9 @@ app.get('/api/admin/export/admins.csv', auth, adminOrSuper, (req, res) => {
   const rows = DB.admins.map(a => {
     const courseIds = adminCourseIds(a.id);
     const subjects = (a.subjects && a.subjects.length) ? a.subjects.join('; ') : (a.subject || '');
-    return [a.name, a.email, subjects, courseIds.length, studentsInCourses(courseIds).length, a.phone || '', inDate(a.createdAt)];
+    // Use the same batch-aware count every other screen uses, so the CSV and the
+    // Admins page can't disagree about how many students an admin has.
+    return [a.name, a.email, subjects, courseIds.length, adminVisibleStudentIds(a.id).length,a.phone || '', inDate(a.createdAt)];
   });
   sendCsv(res, `dhishaai_admins_${Date.now()}.csv`, toCsv(headers, rows));
 });

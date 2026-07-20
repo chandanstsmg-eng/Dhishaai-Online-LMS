@@ -924,28 +924,31 @@ const EmptyState = ({ icon, title, desc, action }) => (
 
 // ─── LANDING PAGE ──────────────────────────────────────────────────────────────
 const LandingPage = ({ onGetStarted }) => {
+  // Real, public figures counted from the database. Nothing on this page is
+  // invented — if we can't count it, we don't claim it.
+  const [pub, setPub] = useState(null);
+  useEffect(() => {
+    fetch("/api/public/stats").then(r => r.ok ? r.json() : null).then(setPub).catch(() => {});
+  }, []);
+
   const features = [
     { icon: "book", title: "Structured Courses", desc: "Industry-designed curriculum for Python, SQL, Power BI, Excel & ML." },
-    { icon: "ai", title: "AI Tutor", desc: "Get instant answers powered by Claude AI — available 24/7." },
-    { icon: "code", title: "Coding Playground", desc: "Write and execute Python code directly in your browser." },
-    { icon: "quiz", title: "Smart Quizzes", desc: "Adaptive assessments that test real understanding." },
-    { icon: "trophy", title: "XP & Leaderboard", desc: "Earn XP, badges, and compete with your batch." },
-    { icon: "cert", title: "Certificates", desc: "Verified certificates to share on LinkedIn." },
+    { icon: "ai", title: "AI Tutor", desc: "Get instant answers from an AI tutor whenever you're stuck." },
+    { icon: "code", title: "Coding Playground", desc: "Practise Python with AI-assisted explanations of your code." },
+    { icon: "quiz", title: "Smart Quizzes", desc: "Assessments that test real understanding, graded automatically." },
+    { icon: "trophy", title: "XP & Leaderboard", desc: "Earn XP as you learn and compete with your batch." },
+    { icon: "cert", title: "Certificates", desc: "Earn a certificate when you complete a course." },
     { icon: "forum", title: "Community Forum", desc: "Ask, discuss, and collaborate with peers & instructors." },
     { icon: "assign", title: "Assignments", desc: "Submit work and get detailed feedback from instructors." },
   ];
-  const testimonials = [
-    { name: "Priyanka M.", role: "Data Analyst at TCS", text: "DhishaAI transformed my career. The structured curriculum and AI tutor helped me crack interviews confidently.", avatar: "P" },
-    { name: "Karthik R.", role: "Business Analyst at Infosys", text: "The hands-on Python playground made coding click for me. Got placed within 3 months of completing the course.", avatar: "K" },
-    { name: "Sneha T.", role: "BI Developer at Wipro", text: "Power BI certification from DhishaAI gave me the edge I needed. Highly structured and practical content.", avatar: "S" },
+  // Counted live, so these can never drift from reality.
+  const stats = [
+    [pub ? String(pub.courses) : "—", pub && pub.courses === 1 ? "Course" : "Courses"],
+    ["5", "Subject Tracks"],
+    ["Live", "Instructor Support"],
+    ...(pub?.aiEnabled ? [["24/7", "AI Tutor"]] : []),
   ];
-  const stats = [["2,000+", "Students Placed"], ["4.8★", "Average Rating"], ["15+", "Live Courses"], ["24/7", "AI Support"]];
-  const courses = [
-    { title: "Python for Data Analytics", tag: "BESTSELLER", color: "#4F46E5", lessons: 24, duration: "10 hrs" },
-    { title: "SQL for Data Analysis", tag: "POPULAR", color: "#0EA5E9", lessons: 18, duration: "8 hrs" },
-    { title: "Power BI Masterclass", tag: "NEW", color: "#F59E0B", lessons: 20, duration: "9 hrs" },
-    { title: "Machine Learning Basics", tag: "ADVANCED", color: "#10B981", lessons: 30, duration: "15 hrs" },
-  ];
+  const courses = (pub?.courseList || []).map(c => ({ title: c.title, tag: c.category || "COURSE", color: c.color }));
 
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(160deg,#0D2137 0%,#17406E 55%,#1a4d8a 100%)", overflowX: "hidden" }}>
@@ -957,7 +960,6 @@ const LandingPage = ({ onGetStarted }) => {
         <div className="landing-nav-links">
           <span className="landing-nav-link" onClick={() => document.getElementById("courses")?.scrollIntoView({ behavior: "smooth" })}>Courses</span>
           <span className="landing-nav-link" onClick={() => document.getElementById("features")?.scrollIntoView({ behavior: "smooth" })}>Features</span>
-          <span className="landing-nav-link" onClick={() => document.getElementById("testimonials")?.scrollIntoView({ behavior: "smooth" })}>Testimonials</span>
           <span className="landing-nav-link" onClick={() => document.getElementById("contact")?.scrollIntoView({ behavior: "smooth" })}>Contact</span>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
@@ -976,7 +978,7 @@ const LandingPage = ({ onGetStarted }) => {
           <span style={{ color: B.orange, textShadow: `0 0 40px ${B.orange}55` }}>Land Your Dream Job.</span>
         </h1>
         <p style={{ fontSize: "clamp(15px,1.8vw,19px)", color: "rgba(255,255,255,.68)", marginBottom: 40, maxWidth: 580, margin: "0 auto 40px", lineHeight: 1.6 }}>
-          Structured courses, 24/7 AI tutoring, live coding practice, and placement support — everything you need to become a job-ready professional.
+          Structured courses, an AI tutor, guided coding practice, and career planning tools — everything you need to become a job-ready professional.
         </p>
         <div style={{ display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap" }}>
           <button className="btn btn-primary btn-lg" onClick={onGetStarted}>Start Learning Free</button>
@@ -1013,7 +1015,8 @@ const LandingPage = ({ onGetStarted }) => {
         </div>
       </div>
 
-      {/* Course Preview */}
+      {/* Course Preview — real courses only; hidden until they load */}
+      {courses.length > 0 && (
       <div id="courses" style={{ padding: "0 clamp(16px,4vw,48px) clamp(40px,6vw,80px)", maxWidth: 1160, margin: "0 auto" }}>
         <div style={{ textAlign: "center", marginBottom: 36 }}>
           <h2 style={{ fontSize: "clamp(22px,3vw,34px)", fontWeight: 800, color: "#fff", marginBottom: 10 }}>Our Courses</h2>
@@ -1033,34 +1036,16 @@ const LandingPage = ({ onGetStarted }) => {
           ))}
         </div>
       </div>
+      )}
 
-      {/* Testimonials */}
-      <div id="testimonials" style={{ padding: "0 clamp(16px,4vw,48px) clamp(40px,6vw,80px)", maxWidth: 1100, margin: "0 auto" }}>
-        <div style={{ textAlign: "center", marginBottom: 36 }}>
-          <h2 style={{ fontSize: "clamp(22px,3vw,34px)", fontWeight: 800, color: "#fff", marginBottom: 10 }}>What Our Students Say</h2>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(300px,1fr))", gap: 20 }}>
-          {testimonials.map(t => (
-            <div key={t.name} className="testimonial-card">
-              <div style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 52, color: B.orange, height: 26, marginBottom: 8, lineHeight: 1, userSelect: "none" }}>&ldquo;</div>
-              <p style={{ color: "rgba(255,255,255,.8)", fontSize: 14, lineHeight: 1.7, marginBottom: 18 }}>{t.text}</p>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <div style={{ width: 40, height: 40, borderRadius: 10, background: `${B.orange}30`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, color: B.orange, fontSize: 16 }}>{t.avatar}</div>
-                <div>
-                  <div style={{ fontWeight: 700, color: "#fff", fontSize: 14 }}>{t.name}</div>
-                  <div style={{ fontSize: 12, color: "rgba(255,255,255,.5)" }}>{t.role}</div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+      {/* Testimonials intentionally omitted: we publish student quotes only when
+          they are real and consented to. Add them here once you have them. */}
 
       {/* CTA Banner */}
       <div style={{ padding: "0 clamp(16px,4vw,48px) clamp(48px,6vw,80px)", maxWidth: 800, margin: "0 auto", textAlign: "center" }}>
         <div style={{ background: `linear-gradient(135deg,${B.orange}22,rgba(23,64,110,.4))`, border: `1px solid ${B.orange}44`, borderRadius: 24, padding: "clamp(32px,5vw,56px)" }}>
           <h2 style={{ fontSize: "clamp(24px,3vw,38px)", fontWeight: 900, color: "#fff", marginBottom: 14 }}>Ready to Start Your Data Career?</h2>
-          <p style={{ color: "rgba(255,255,255,.65)", marginBottom: 28, fontSize: 16 }}>Join 2,000+ students who transformed their careers with DhishaAI</p>
+          <p style={{ color: "rgba(255,255,255,.65)", marginBottom: 28, fontSize: 16 }}>Start learning with DhishaAI — structured courses, guided practice, and instructor support.</p>
           <button className="btn btn-primary btn-lg" onClick={onGetStarted}>Enroll Now — It's Free</button>
         </div>
       </div>
@@ -2453,7 +2438,7 @@ const StudentDashboard = ({ user, studentId, onOpenCourse }) => {
   const exploreCourses = catalog.filter(c => c.status !== "enrolled");
 
   const avgProgress = profile?.progress?.length > 0 ? Math.round(profile.progress.reduce((a, p) => a + p.percent, 0) / profile.progress.length) : 0;
-  const rank = leaderboard.findIndex(s => s.id === profile?.id) + 1;
+  const rank = leaderboard.find(s => s.id === profile?.id)?.rank || 0; // competition rank from the server
   const firstName = user.name.split(" ")[0];
 
   return (
@@ -2493,7 +2478,7 @@ const StudentDashboard = ({ user, studentId, onOpenCourse }) => {
       <div className="stat-grid" style={{ marginBottom: 16 }}>
         <StatCard label="Enrolled Courses" value={profile?.enrolledCourses?.length || 0} icon="book" color="#4F46E5" />
         <StatCard label="Quizzes Completed" value={profile?.quizResults?.length || 0} icon="quiz" color="#10B981" />
-        <StatCard label="Certificates" value={profile?.progress?.filter(p => p.percent >= 80 && p.certifiable).length || 0} icon="cert" color="#F59E0B" />
+        <StatCard label="Certificates" value={profile?.progress?.filter(p => p.percent >= 100 && p.certifiable).length || 0} icon="cert" color="#F59E0B" />
       </div>
 
       {/* Explore / request enrollment */}
@@ -3131,8 +3116,10 @@ const StudentQuizPage = () => {
   // Timer for active quiz — uses the admin-set time limit, else 60s per question.
   useEffect(() => {
     if (!active || submitted) return;
-    const total = active.timeLimit ? active.timeLimit * 60 : active.questions.length * 60;
-    setTimeLeft(total);
+    // Only run a countdown when the admin actually set a limit. Previously an
+    // invented 60s-per-question deadline was imposed that nobody had chosen.
+    if (!active.timeLimit) { setTimeLeft(null); return; }
+    setTimeLeft(active.timeLimit * 60);
     const timer = setInterval(() => setTimeLeft(t => { if (t <= 1) { clearInterval(timer); handleSubmit(); return 0; } return t - 1; }), 1000);
     return () => clearInterval(timer);
   }, [active?.id]);
@@ -3252,7 +3239,8 @@ const StudentQuizPage = () => {
                 </div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 700, fontSize: 16, color: "var(--text)" }}>{q.title}</div>
-                  <div style={{ fontSize: 13, color: "var(--text2)", marginTop: 3 }}>{q.questions.length} questions · ~{q.questions.length} min</div>
+                  {/* The admin's real limit — not a made-up 1-min-per-question estimate. */}
+                  <div style={{ fontSize: 13, color: "var(--text2)", marginTop: 3 }}>{q.questions.length} questions{q.timeLimit ? ` · ⏱ ${q.timeLimit} min limit` : " · no time limit"}</div>
                   {myResult && (
                     <div style={{ fontSize: 12, marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
                       <span style={{ color: "var(--text2)" }}>Best score:</span>
@@ -3315,11 +3303,12 @@ print(f"Average score: {df['Score'].mean()}")`);
       <div className="section-header">
         <div>
           <h1 className="section-title">Python Playground</h1>
-          <p style={{ color: "var(--text2)", fontSize: 13 }}>Write and run Python code right in your browser</p>
+          {/* Honest labelling: this is an AI walkthrough, not a Python interpreter. */}
+          <p style={{ color: "var(--text2)", fontSize: 13 }}>Write Python and have an AI tutor walk through what it would do</p>
         </div>
         <button className="btn btn-primary" onClick={runCode} disabled={loading}>
           {loading ? <Spinner size={16} color="#fff" /> : <Ico n="play" s={16} />}
-          {loading ? "Running..." : "Run Code"}
+          {loading ? "Analysing..." : "Explain & Trace"}
         </button>
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
@@ -3343,11 +3332,15 @@ print(f"Average score: {df['Score'].mean()}")`);
         <div className="card-flat" style={{ display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 240 }}>
           <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8, background: "var(--surface2)" }}>
             <div style={{ width: 10, height: 10, borderRadius: "50%", background: output && !output.startsWith("⏳") ? B.success : "#CBD5E1" }} />
-            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text2)" }}>Output</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text2)" }}>Predicted output (AI)</span>
           </div>
           <pre style={{ flex: 1, padding: 16, fontFamily: "'Fira Code','Consolas','Courier New',monospace", fontSize: 13, background: "#0f172a", color: output.includes("Error") || output.includes("⚠️") ? "#FCA5A5" : "#86efac", overflow: "auto", margin: 0, lineHeight: 1.75, whiteSpace: "pre-wrap" }}>
-            {output || "▶ Click 'Run Code' to execute"}
+            {output || "▶ Click 'Explain & Trace' to see what this code would do"}
           </pre>
+          {/* Students must know this is a prediction — an LLM can be confidently wrong. */}
+          <div style={{ padding: "8px 16px", borderTop: "1px solid var(--border)", background: "var(--surface2)", fontSize: 11, color: "var(--text2)", lineHeight: 1.5 }}>
+            ⚠️ This is an AI's prediction of what your code would print, not a real Python run. Always confirm results in a real Python environment.
+          </div>
         </div>
       </div>
       {explain && (
@@ -3443,14 +3436,9 @@ const ProgressPage = () => {
 
   if (!profile) return <div style={{ padding: 60, textAlign: "center" }}><Spinner size={32} /></div>;
 
-  const BADGES = [
-    { label: "First Login", icon: "⭐", earned: true, desc: "Welcome to DhishaAI!" },
-    { label: "7-Day Streak", icon: "🔥", earned: profile.streak >= 7, desc: "7 consecutive days" },
-    { label: "Quiz Master", icon: "🏆", earned: (profile.quizResults?.length || 0) > 0, desc: "Completed a quiz" },
-    { label: "Data Wizard", icon: "🧙", earned: profile.xp >= 2000, desc: "Earned 2000+ XP" },
-    { label: "Course Champ", icon: "📚", earned: (profile.enrolledCourses?.length || 0) >= 3, desc: "3+ courses enrolled" },
-    { label: "Code Ninja", icon: "💻", earned: false, desc: "Use the playground" },
-  ];
+  // Badges come from the server, evaluated against real data — every one of
+  // them is genuinely achievable and none are hardcoded on or off.
+  const BADGES = profile.badgeList || [];
   const earnedCount = BADGES.filter(b => b.earned).length;
 
   return (
@@ -3479,7 +3467,8 @@ const ProgressPage = () => {
                   <span style={{ fontWeight: 700, color: p.percent >= 80 ? B.success : B.orange, fontSize: 14 }}>{p.percent}%</span>
                 </div>
                 <ProgressBar value={p.percent} height={10} />
-                {p.percent >= 80 && p.certifiable && <div style={{ fontSize: 11, color: B.success, fontWeight: 700, marginTop: 4 }}>✓ Certificate unlocked!</div>}
+                {p.certifiable && p.percent >= 100 && <div style={{ fontSize: 11, color: B.success, fontWeight: 700, marginTop: 4 }}>✓ Certificate earned!</div>}
+                {p.certifiable && p.percent >= 80 && p.percent < 100 && <div style={{ fontSize: 11, color: B.orange, fontWeight: 700, marginTop: 4 }}>Almost there — finish the course to earn your certificate</div>}
               </div>
             );
           })}
@@ -3525,12 +3514,16 @@ const ProgressPage = () => {
 const CertificatesPage = ({ user }) => {
   const [profile, setProfile] = useState(null);
   const [courses, setCourses] = useState([]);
-  useEffect(() => { GET("/profile").then(setProfile); GET("/courses").then(setCourses); }, []);
-  // Only progress the server can vouch for (`certifiable` = the course has real
-  // authored content) can produce a certificate.
-  const completed = profile?.progress?.filter(p => p.percent >= 80 && p.certifiable) || [];
+  const [certs, setCerts] = useState([]);
+  // Certificates are issued and stored by the server; the client no longer
+  // decides who has earned one.
+  useEffect(() => {
+    GET("/profile").then(setProfile);
+    GET("/courses").then(setCourses);
+    GET("/certificates").then(d => setCerts(Array.isArray(d) ? d : [])).catch(() => {});
+  }, []);
 
-  const downloadCert = course => {
+  const downloadCert = cert => {
     const canvas = document.createElement("canvas");
     canvas.width = 1200; canvas.height = 840;
     const ctx = canvas.getContext("2d");
@@ -3556,44 +3549,52 @@ const CertificatesPage = ({ user }) => {
     ctx.fillText("This is to certify that", 600, 280);
     // Name
     ctx.fillStyle = "#17406E"; ctx.font = "bold 48px Georgia, serif";
-    ctx.fillText(user.name, 600, 360);
+    ctx.fillText(cert.studentName, 600, 360); // frozen at issue time, not editable later
     ctx.strokeStyle = "#E87722"; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(300, 380); ctx.lineTo(900, 380); ctx.stroke();
     // Course
     ctx.fillStyle = "#64748B"; ctx.font = "22px sans-serif";
     ctx.fillText("has successfully completed the course", 600, 430);
     ctx.fillStyle = "#E87722"; ctx.font = "bold 34px sans-serif";
-    ctx.fillText(course.title, 600, 490);
-    // Date & Footer
+    ctx.fillText(cert.courseTitle, 600, 490);
+    // Issue date comes from the stored record, so re-downloading never restamps it.
     ctx.fillStyle = "#64748B"; ctx.font = "18px sans-serif";
-    ctx.fillText(`Issued on ${new Date().toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" })}`, 600, 580);
+    ctx.fillText(`Issued on ${new Date(cert.issuedAt).toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" })}`, 600, 580);
+    // Serial makes the certificate verifiable rather than just a picture.
+    ctx.fillStyle = "#0D2137"; ctx.font = "bold 16px monospace";
+    ctx.fillText(`Certificate No. ${cert.serial}`, 600, 615);
+    ctx.fillStyle = "#64748B"; ctx.font = "13px sans-serif";
+    ctx.fillText("Verify at www.dhishaai.com — Certificates → Verify", 600, 640);
     ctx.fillStyle = "#0D2137"; ctx.font = "bold 20px sans-serif";
     ctx.fillText("DhishaAI Complete Analytics", 600, 700);
     ctx.fillStyle = "#64748B"; ctx.font = "15px sans-serif";
     ctx.fillText("contactus@dhishaai.com", 600, 728);
-    const a = document.createElement("a"); a.href = canvas.toDataURL("image/png"); a.download = `DhishaAI_Certificate_${course.title.replace(/ /g, "_")}.png`; a.click();
+    const a = document.createElement("a"); a.href = canvas.toDataURL("image/png"); a.download = `DhishaAI_Certificate_${cert.serial}.png`; a.click();
   };
 
   return (
     <div className="fadeIn">
       <h1 style={{ fontSize: 24, fontWeight: 800, marginBottom: 6, color: "var(--text)" }}>Certificates</h1>
-      <p style={{ color: "var(--text2)", marginBottom: 24 }}>Complete 80% of a course to earn your downloadable certificate</p>
-      {completed.length === 0 ? (
-        <EmptyState icon="cert" title="No certificates yet" desc="Complete 80% of any course to earn a certificate." />
+      <p style={{ color: "var(--text2)", marginBottom: 24 }}>Finish a course to earn a certificate with its own verification number</p>
+      {certs.length === 0 ? (
+        <EmptyState icon="cert" title="No certificates yet" desc="Complete every topic, reading and quiz in a course to earn its certificate." />
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(300px,1fr))", gap: 20 }}>
-          {completed.map(p => {
-            const course = courses.find(c => c.id === p.courseId);
-            if (!course) return null;
+          {certs.map(cert => {
+            const course = courses.find(c => c.id === cert.courseId);
+            const color = course?.color || B.orange;
             return (
-              <div key={p.courseId} className="card" style={{ padding: 32, textAlign: "center" }}>
-                <div style={{ width: 72, height: 72, borderRadius: 18, background: `${course.color}20`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
-                  <Ico n="cert" s={36} c={course.color} />
+              <div key={cert.id} className="card" style={{ padding: 32, textAlign: "center" }}>
+                <div style={{ width: 72, height: 72, borderRadius: 18, background: `${color}20`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
+                  <Ico n="cert" s={36} c={color} />
                 </div>
-                <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 6, color: "var(--text)" }}>{course.title}</div>
-                <div style={{ fontSize: 13, color: "var(--text2)", marginBottom: 14 }}>Progress: {p.percent}%</div>
-                <span className="badge badge-green" style={{ marginBottom: 20 }}>✓ Completed</span>
-                <button className="btn btn-primary" style={{ width: "100%", justifyContent: "center" }} onClick={() => downloadCert(course)}>
+                <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 6, color: "var(--text)" }}>{cert.courseTitle}</div>
+                <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 4 }}>
+                  Issued {new Date(cert.issuedAt).toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" })}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--text2)", fontFamily: "monospace", marginBottom: 14 }}>{cert.serial}</div>
+                <span className="badge badge-green" style={{ marginBottom: 20 }}>✓ Course completed</span>
+                <button className="btn btn-primary" style={{ width: "100%", justifyContent: "center" }} onClick={() => downloadCert(cert)}>
                   <Ico n="download" s={16} />Download Certificate
                 </button>
               </div>
@@ -4418,8 +4419,9 @@ const LeaderboardPage = () => {
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {board.map((s, i) => (
           <div key={s.id} className="leaderboard-row" style={{ background: s.id === profile?.id ? `${B.orange}10` : "var(--surface)", border: s.id === profile?.id ? `1.5px solid ${B.orange}55` : "1px solid var(--border)" }}>
-            <div style={{ textAlign: "center", fontWeight: 800, fontSize: i < 3 ? 20 : 15, color: i < 3 ? undefined : "var(--text2)" }}>
-              {["🥇", "🥈", "🥉"][i] || i + 1}
+            {/* Position is the server's competition rank, so equal XP shares a place. */}
+            <div style={{ textAlign: "center", fontWeight: 800, fontSize: (s.rank || i + 1) <= 3 ? 20 : 15, color: (s.rank || i + 1) <= 3 ? undefined : "var(--text2)" }}>
+              {["🥇", "🥈", "🥉"][(s.rank || i + 1) - 1] || s.rank || i + 1}
             </div>
             <div>
               <div style={{ fontWeight: 600, fontSize: 14, color: "var(--text)" }}>{s.name}{s.id === profile?.id && <span className="badge badge-orange" style={{ marginLeft: 8, fontSize: 10 }}>You</span>}</div>
@@ -4974,8 +4976,9 @@ const StudyPlannerPage = () => {
   const todayItems = plan.filter(p => p.date === today);
   const upcomingItems = plan.filter(p => p.date > today);
   const pastItems = plan.filter(p => p.date < today).sort((a,b) => b.date.localeCompare(a.date));
-  const totalPlanned = plan.reduce((s, p) => s + (p.duration || 60), 0);
-  const totalDone = plan.filter(p => p.done).reduce((s, p) => s + (p.duration || 60), 0);
+  // Sessions with no duration count as 0, not an invented hour.
+  const totalPlanned = plan.reduce((s, p) => s + (Number(p.duration) || 0), 0);
+  const totalDone = plan.filter(p => p.done).reduce((s, p) => s + (Number(p.duration) || 0), 0);
 
   const addItem = async () => {
     if (!form.title.trim()) { show("Enter a title", "error"); return; }
@@ -5343,7 +5346,7 @@ const CareerPage = () => {
 
           {/* Recommended Courses */}
           <div className="card-flat" style={{ padding: 24 }}>
-            <h3 style={{ fontWeight: 700, fontSize: 15, color: "var(--text)", marginBottom: 14 }}>📚 Recommended for Your Goal</h3>
+            <h3 style={{ fontWeight: 700, fontSize: 15, color: "var(--text)", marginBottom: 14 }}>📚 Courses Available</h3>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {courses.slice(0, 4).map(c => (
                 <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "var(--surface2)", borderRadius: 10, border: "1px solid var(--border)" }}>
@@ -5377,7 +5380,11 @@ const StudentAnalyticsPage = () => {
 
   if (!profile) return <div style={{ padding: 60, textAlign: "center" }}><Spinner size={32} /></div>;
 
-  const rank = board.findIndex(s => s.id === profile.id) + 1;
+  // Rank comes from the server as a competition rank: students on equal XP share
+  // the same rank, and `behind` counts only those with strictly less XP.
+  const myRow = board.find(s => s.id === profile.id);
+  const rank = myRow?.rank || 0;
+  const behind = myRow?.behind || 0;
   const avgProgress = profile.progress?.length > 0 ? Math.round(profile.progress.reduce((a,p) => a+p.percent, 0) / profile.progress.length) : 0;
   const quizAvg = profile.quizResults?.length > 0 ? Math.round(profile.quizResults.reduce((a,r) => a+(r.score/r.total*100), 0) / profile.quizResults.length) : 0;
 
@@ -5505,7 +5512,7 @@ const StudentAnalyticsPage = () => {
             {rank <= 3 && <div style={{ marginLeft: "auto", fontSize: 28 }}>{["🥇","🥈","🥉"][rank-1]}</div>}
           </div>
           <div style={{ marginTop: 12, fontSize: 12, color: "var(--text2)", textAlign: "center" }}>
-            {board.length > 0 && rank < board.length && `${board.length - rank} students behind you · `}
+            {behind > 0 && `${behind} student${behind === 1 ? "" : "s"} behind you · `}
             Keep learning to climb the leaderboard!
           </div>
         </div>
